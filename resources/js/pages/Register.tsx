@@ -1,15 +1,7 @@
 import { FormEvent, useState } from 'react';
-import { apiFetch } from '../lib/api';
+import { Link, router } from '@inertiajs/react';
 
-interface RegisterProps {
-    onSuccess: () => void;
-    onLogin: () => void;
-}
-
-export default function Register({
-    onSuccess,
-    onLogin,
-}: RegisterProps) {
+export default function Register() {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -18,7 +10,7 @@ export default function Register({
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    async function handleSubmit(
+    function handleSubmit(
         event: FormEvent<HTMLFormElement>,
     ) {
         event.preventDefault();
@@ -32,35 +24,28 @@ export default function Register({
 
         setLoading(true);
 
-        try {
-            const response = await apiFetch('/register', {
-                method: 'POST',
-                body: JSON.stringify({
-                    name,
-                    email,
-                    password,
-                    password_confirmation: passwordConfirmation,
-                }),
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                setError(
-                    data.message ||
-                        'Unable to create your account.',
-                );
-                return;
-            }
-
-            onSuccess();
-        } catch {
-            setError(
-                'Something went wrong. Please try again.',
-            );
-        } finally {
-            setLoading(false);
-        }
+        router.post(
+            '/register',
+            {
+                name,
+                email,
+                password,
+                password_confirmation: passwordConfirmation,
+            },
+            {
+                onError: (errors) => {
+                    setError(
+                        errors.email ||
+                            errors.password ||
+                            errors.name ||
+                            'Unable to create your account.',
+                    );
+                },
+                onFinish: () => {
+                    setLoading(false);
+                },
+            },
+        );
     }
 
     return (
@@ -172,12 +157,9 @@ export default function Register({
 
                 <p className="auth-switch">
                     Already have an account?{' '}
-                    <button
-                        type="button"
-                        onClick={onLogin}
-                    >
+                    <Link href="/login">
                         Log in
-                    </button>
+                    </Link>
                 </p>
             </div>
         </div>

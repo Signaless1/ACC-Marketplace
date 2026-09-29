@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
-use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -11,7 +11,7 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function register(Request $request): JsonResponse
+    public function register(Request $request): RedirectResponse
     {
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
@@ -29,13 +29,10 @@ class AuthController extends Controller
 
         $request->session()->regenerate();
 
-        return response()->json([
-            'message' => 'Account created successfully.',
-            'user' => $user,
-        ], 201);
+        return redirect()->route('dashboard');
     }
 
-    public function login(Request $request): JsonResponse
+    public function login(Request $request): RedirectResponse
     {
         $credentials = $request->validate([
             'email' => ['required', 'email'],
@@ -50,25 +47,20 @@ class AuthController extends Controller
 
         $request->session()->regenerate();
 
-        return response()->json([
-            'message' => 'Logged in successfully.',
-            'user' => Auth::user(),
-        ]);
+        return redirect()->route('dashboard');
     }
 
-    public function logout(Request $request): JsonResponse
+    public function logout(Request $request): RedirectResponse
     {
         Auth::logout();
 
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return response()->json([
-            'message' => 'Logged out successfully.',
-        ]);
+        return redirect()->route('home');
     }
 
-    public function user(): JsonResponse
+    public function user()
     {
         return response()->json([
             'user' => Auth::user(),

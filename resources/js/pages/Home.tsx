@@ -7,29 +7,22 @@ import Safety from '../components/Safety';
 import CTA from '../components/CTA';
 import Footer from '../components/Footer';
 
-import type { User } from '../types/auth';
-
-interface HomeProps {
-    user: User | null;
-    onLogin: () => void;
-    onRegister: () => void;
-    onLogout: () => void;
+interface User {
+    id: number;
+    name: string;
+    email: string;
 }
 
-export default function Home({
-    user,
-    onLogin,
-    onRegister,
-    onLogout,
-}: HomeProps) {
+interface HomeProps {
+    auth: {
+        user: User | null;
+    };
+}
+
+export default function Home({ auth }: HomeProps) {
     return (
         <>
-            <Navbar
-                user={user}
-                onLogin={onLogin}
-                onRegister={onRegister}
-                onLogout={onLogout}
-            />
+            <Navbar user={auth.user} />
 
             <main>
                 <Hero />

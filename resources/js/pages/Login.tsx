@@ -1,53 +1,33 @@
 import { FormEvent, useState } from 'react';
-import { apiFetch } from '../lib/api';
+import { Link, router } from '@inertiajs/react';
 
-interface LoginProps {
-    onSuccess: () => void;
-    onRegister: () => void;
-}
-
-export default function Login({
-    onSuccess,
-    onRegister,
-}: LoginProps) {
+export default function Login() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    function handleSubmit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         setError('');
         setLoading(true);
 
-        try {
-            const response = await apiFetch('/login', {
-                method: 'POST',
-                body: JSON.stringify({
-                    email,
-                    password,
-                }),
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
+        router.post('/login', 
+            { email, password },
+        {
+            onError: (errors) => {
                 setError(
-                    data.message ||
+                    errors.email ||
+                        errors.password ||
                         'Unable to log in. Please check your information.',
                 );
-                return;
-            }
-
-            onSuccess();
-        } catch {
-            setError(
-                'Something went wrong. Please try again.',
-            );
-        } finally {
-            setLoading(false);
-        }
+            },
+            onFinish: () => {
+                setLoading(false);
+            },
+        },
+    );
     }
 
     return (
@@ -122,12 +102,9 @@ export default function Login({
 
                 <p className="auth-switch">
                     Don't have an account?{' '}
-                    <button
-                        type="button"
-                        onClick={onRegister}
-                    >
+                    <Link href="/register">
                         Create one
-                    </button>
+                    </Link>
                 </p>
             </div>
         </div>
