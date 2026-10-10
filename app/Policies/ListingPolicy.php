@@ -1,0 +1,31 @@
+<?php
+
+namespace App\Policies;
+
+use App\Models\Listing;
+use App\Models\User;
+
+class ListingPolicy
+{
+    public function update(User $user, Listing $listing): bool
+    {
+        return $listing->user_id === $user->id;
+    }
+
+    public function delete(User $user, Listing $listing): bool
+    {
+        return $listing->user_id === $user->id;
+    }
+
+    /**
+     * Hidden listings are only visible to their owner and admins.
+     */
+    public function view(User $user, Listing $listing): bool
+    {
+        if ($listing->hidden_at === null) {
+            return true;
+        }
+
+        return $user->isAdmin() || $listing->user_id === $user->id;
+    }
+}
