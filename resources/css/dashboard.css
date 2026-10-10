@@ -22,8 +22,22 @@
     --terracotta: #c8785a;
     --terracotta-light: #f5e4dd;
 
+    /*
+     * Accent: a warm coral that sits opposite the forest green on the
+     * colour wheel. Used sparingly (buy buttons, low-stock and alert
+     * badges) so the green identity stays in charge.
+     */
+    --accent: #d4623a;
+    --accent-dark: #b44a27;
+    --accent-light: #fcebe3;
+
+    /* Text tiers, all >= 4.5:1 on the cream/white surfaces. */
+    --ink-strong: #12291f;
+    --ink-body: #2f4a3d;
+    --ink-soft: #52665c;
+
     --text: #19362b;
-    --muted: #687870;
+    --muted: #52665c;
 
     --border: rgba(25, 54, 43, 0.1);
 
@@ -105,6 +119,10 @@
 
     box-shadow:
         12px 0 35px rgba(0, 0, 0, 0.07);
+
+    transition:
+        transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 260ms ease;
 }
 
 /* subtle animated glow */
@@ -203,7 +221,14 @@
     position: relative;
     z-index: 2;
 
-    flex: 1;
+    flex: 1 1 auto;
+
+    /* Lets the nav scroll instead of pushing the footer/logout off-screen */
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
 
     padding: 24px 14px;
 }
@@ -356,7 +381,9 @@
 .sidebar-footer {
     position: relative;
 
-    min-height: 190px;
+    /* Decorative artwork shrinks first; the logout bar (52px) always stays. */
+    flex: 0 100 190px;
+    min-height: 52px;
 
     overflow: hidden;
 
@@ -426,6 +453,22 @@
     min-height: 100vh;
 
     margin-left: 260px;
+
+    transition: margin-left 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Sidebar closed (desktop): slide it away and let the page use the room. */
+.dashboard-shell.sidebar-collapsed .dashboard-sidebar {
+    transform: translateX(-100%);
+    box-shadow: none;
+}
+
+.dashboard-shell.sidebar-collapsed .dashboard-main {
+    margin-left: 0;
+}
+
+.sidebar-backdrop {
+    display: none;
 }
 
 /* =========================================================
@@ -1335,56 +1378,38 @@
 }
 
 @media (max-width: 900px) {
+    /* Phones/tablets: the sidebar is a drawer, closed until opened. */
     .dashboard-sidebar {
-        width: 82px;
+        width: min(290px, 86vw);
+        transform: translateX(-100%);
+        box-shadow: none;
     }
 
-    .sidebar-brand {
-        padding: 17px 10px;
+    .dashboard-shell.sidebar-open-mobile .dashboard-sidebar {
+        transform: translateX(0);
+        box-shadow: 18px 0 50px rgba(0, 0, 0, 0.28);
     }
 
-    .sidebar-brand-link {
-        justify-content: center;
+    .sidebar-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 95;
+        display: block;
+        border: 0;
+        background: rgba(8, 24, 17, 0.5);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 220ms ease;
     }
 
-    .sidebar-brand-text {
-        display: none;
+    .dashboard-shell.sidebar-open-mobile .sidebar-backdrop {
+        opacity: 1;
+        pointer-events: auto;
     }
 
-    .sidebar-brand-logo {
-        width: 47px;
-    }
-
-    .sidebar-section-label,
-    .sidebar-nav-link span,
-    .sidebar-sell-button span {
-        display: none;
-    }
-
-    .sidebar-nav-link {
-        justify-content: center;
-        padding: 0;
-    }
-
-    .sidebar-sell-button {
-        margin-inline: 5px;
-    }
-
-    .sidebar-lineart {
-        display: none;
-    }
-
-    .sidebar-logout {
-        justify-content: center;
-        padding: 0;
-    }
-
-    .sidebar-logout span {
-        display: none;
-    }
-
-    .dashboard-main {
-        margin-left: 82px;
+    .dashboard-main,
+    .dashboard-shell.sidebar-collapsed .dashboard-main {
+        margin-left: 0;
     }
 
     .dashboard-header {
@@ -1441,5 +1466,220 @@
 
     .dashboard-hero h2 {
         font-size: 40px;
+    }
+}
+/* =========================================================
+   SIDEBAR TOGGLE (header button)
+========================================================= */
+
+.sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 42px;
+    height: 42px;
+    flex-shrink: 0;
+
+    margin-right: 14px;
+
+    border: 1px solid var(--border);
+    border-radius: 13px;
+
+    background: white;
+    color: var(--forest);
+
+    cursor: pointer;
+
+    transition:
+        background 160ms ease,
+        border-color 160ms ease,
+        transform 160ms ease;
+}
+
+.sidebar-toggle:hover {
+    background: var(--sage);
+    border-color: rgba(23, 107, 77, 0.35);
+}
+
+.sidebar-toggle:active {
+    transform: scale(0.95);
+}
+
+.sidebar-toggle:focus-visible,
+.sidebar-close:focus-visible {
+    outline: 3px solid rgba(217, 164, 65, 0.65);
+    outline-offset: 2px;
+}
+
+/* Close button inside the drawer (shown on small screens only). */
+.sidebar-close {
+    position: absolute;
+    top: 14px;
+    right: 12px;
+    z-index: 5;
+
+    display: none;
+    align-items: center;
+    justify-content: center;
+
+    width: 34px;
+    height: 34px;
+
+    border: 0;
+    border-radius: 10px;
+
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+
+    cursor: pointer;
+}
+
+.sidebar-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+@media (max-width: 900px) {
+    .sidebar-close {
+        display: inline-flex;
+    }
+}
+
+/* =========================================================
+   READABILITY
+   Tailwind's lightest greys (slate-400/500, gray-400/500) were
+   dropping under 4.5:1 against the cream page background, so
+   they are re-mapped to darker values inside the app shell.
+   (Unlayered rules beat Tailwind's layered utilities.)
+========================================================= */
+
+.dashboard-content .text-slate-300,
+.dashboard-content .text-gray-300 {
+    color: #7d8f86;
+}
+
+.dashboard-content .text-slate-400,
+.dashboard-content .text-gray-400 {
+    color: #566860;
+}
+
+.dashboard-content .text-slate-500,
+.dashboard-content .text-gray-500 {
+    color: #43554c;
+}
+
+.dashboard-content .text-slate-600,
+.dashboard-content .text-gray-600 {
+    color: #34483e;
+}
+
+.dashboard-content .placeholder\:text-slate-400::placeholder,
+.dashboard-content input::placeholder,
+.dashboard-content textarea::placeholder {
+    color: #6a7c73;
+    opacity: 1;
+}
+
+.dashboard-content a:focus-visible,
+.dashboard-content button:focus-visible,
+.dashboard-content input:focus-visible,
+.dashboard-content select:focus-visible,
+.dashboard-content textarea:focus-visible {
+    outline: 3px solid rgba(217, 164, 65, 0.6);
+    outline-offset: 2px;
+}
+
+/* =========================================================
+   SHARED SURFACES
+========================================================= */
+
+.surface-card {
+    border: 1px solid #dfe8e2;
+    border-radius: 22px;
+    background: white;
+    box-shadow: 0 10px 30px rgba(31, 61, 47, 0.05);
+}
+
+.accent-btn {
+    background: var(--accent);
+    color: white;
+    box-shadow: 0 10px 22px rgba(212, 98, 58, 0.28);
+    transition:
+        background 160ms ease,
+        transform 160ms ease,
+        box-shadow 160ms ease;
+}
+
+.accent-btn:hover:not(:disabled) {
+    background: var(--accent-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px rgba(212, 98, 58, 0.34);
+}
+
+.accent-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    box-shadow: none;
+}
+
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.toast-in {
+    animation: toastIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes msgIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.msg-in {
+    animation: msgIn 220ms ease both;
+}
+
+@media print {
+    .dashboard-sidebar,
+    .dashboard-header,
+    .sidebar-backdrop,
+    .no-print {
+        display: none !important;
+    }
+
+    .dashboard-main {
+        margin-left: 0 !important;
+    }
+
+    .dashboard-content {
+        width: 100% !important;
+        padding: 0 !important;
+    }
+
+    .dashboard-page {
+        background: white !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-sidebar,
+    .dashboard-main,
+    .toast-in,
+    .msg-in {
+        transition: none;
+        animation: none;
     }
 }

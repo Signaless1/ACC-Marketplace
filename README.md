@@ -56,3 +56,23 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## MVP features added (reviews → admin)
+
+After pulling these changes:
+
+```bash
+php artisan migrate
+php artisan db:seed --class=AdminSeeder   # admin@acc.test / password  (change it!)
+php artisan storage:link
+npm run build   # or npm run dev
+php artisan test
+```
+
+- **Reviews & ratings** – buyers rate sellers on completed orders (`/reviews`, order cards).
+- **Profiles** – public profile at `/users/{id}`; edit name/bio/photo and change password at `/settings`.
+- **Search & filters** – server-side, URL-based (`/marketplace?q=&category=&type=&min_price=&max_price=&availability=&sort=`).
+- **Favorites** – heart on cards/detail page; list at `/favorites`.
+- **Reports** – report listings or users; admins triage at `/admin/reports`.
+- **Admin panel** – `/admin` (stats, users, listings, reports). Admin = `users.role = 'admin'`.
+- **Order integrity** – transactions + row locks, enforced status transitions, Policies for listings/orders.

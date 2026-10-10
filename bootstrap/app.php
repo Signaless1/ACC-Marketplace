@@ -14,6 +14,15 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->web(append: [
             \App\Http\Middleware\HandleInertiaRequests::class,
+            \App\Http\Middleware\EnsureUserIsNotSuspended::class,
+            \App\Http\Middleware\SecurityHeaders::class,
+        ]);
+
+        // Logged-in users who open /login or /register go to their dashboard.
+        $middleware->redirectUsersTo('/dashboard');
+
+        $middleware->alias([
+            'admin' => \App\Http\Middleware\EnsureUserIsAdmin::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

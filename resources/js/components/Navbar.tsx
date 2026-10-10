@@ -1,27 +1,25 @@
-import { Link, router } from '@inertiajs/react';
-
-interface AuthUser {
-    id: number;
-    name: string;
-    email: string;
-}
+import type { User } from '../types/auth';
 
 interface NavbarProps {
-    user?: AuthUser | null;
+    user: User | null;
+    onLogin: () => void;
+    onRegister: () => void;
+    onLogout: () => void;
 }
 
-export default function Navbar({ user = null }: NavbarProps) {
-    function logout() {
-        router.post('/logout');
-    }
-
+export default function Navbar({
+    user,
+    onLogin,
+    onRegister,
+    onLogout,
+}: NavbarProps) {
     return (
         <header className="nav">
             <div className="nav-inner">
-                <Link href="/" className="logo">
+                <a href="/" className="logo">
                     <span className="logo-mark">A</span>
                     ACC Marketplace
-                </Link>
+                </a>
 
                 <nav className="nav-links">
                     <a href="#how-it-works">
@@ -47,23 +45,28 @@ export default function Navbar({ user = null }: NavbarProps) {
                             <button
                                 type="button"
                                 className="btn btn-outline btn-small"
-                                onClick={logout}
+                                onClick={onLogout}
                             >
                                 Log out
                             </button>
                         </>
                     ) : (
                         <>
-                            <Link href="/login" className="nav-login">
+                            <button
+                                type="button"
+                                className="nav-login"
+                                onClick={onLogin}
+                            >
                                 Log in
-                            </Link>
+                            </button>
 
-                            <Link
-                                href="/register"
+                            <button
+                                type="button"
                                 className="btn btn-primary btn-small"
+                                onClick={onRegister}
                             >
                                 Register
-                            </Link>
+                            </button>
                         </>
                     )}
                 </div>
