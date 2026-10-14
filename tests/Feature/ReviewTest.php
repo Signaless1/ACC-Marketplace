@@ -26,7 +26,7 @@ class ReviewTest extends TestCase
         [$seller, $buyer, $order] = $this->completedOrder();
 
         $this->actingAs($buyer)
-            ->post("/orders/{$order->id}/review", ['rating' => 5, 'comment' => 'Great!'])
+            ->post("/orders/{$order->id}/review", ['rating' => 5, 'product_rating' => 4, 'comment' => 'Great!'])
             ->assertSessionHas('success');
 
         $this->assertDatabaseHas('reviews', [
@@ -34,6 +34,7 @@ class ReviewTest extends TestCase
             'seller_id' => $seller->id,
             'reviewer_id' => $buyer->id,
             'rating' => 5,
+            'product_rating' => 4,
         ]);
     }
 
@@ -44,7 +45,7 @@ class ReviewTest extends TestCase
         $order = $this->makeOrder($this->makeListing($seller), $buyer, 'confirmed');
 
         $this->actingAs($buyer)
-            ->post("/orders/{$order->id}/review", ['rating' => 4])
+            ->post("/orders/{$order->id}/review", ['rating' => 4, 'product_rating' => 4])
             ->assertSessionHas('error');
 
         $this->assertDatabaseCount('reviews', 0);
@@ -54,8 +55,8 @@ class ReviewTest extends TestCase
     {
         [, $buyer, $order] = $this->completedOrder();
 
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 5]);
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 1])
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 5, 'product_rating' => 5]);
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 1, 'product_rating' => 1])
             ->assertSessionHas('error');
 
         $this->assertDatabaseCount('reviews', 1);
@@ -66,24 +67,26 @@ class ReviewTest extends TestCase
         [$seller, , $order] = $this->completedOrder();
         $stranger = User::factory()->create();
 
-        $this->actingAs($seller)->post("/orders/{$order->id}/review", ['rating' => 5])->assertForbidden();
-        $this->actingAs($stranger)->post("/orders/{$order->id}/review", ['rating' => 5])->assertForbidden();
+        $this->actingAs($seller)->post("/orders/{$order->id}/review", ['rating' => 5, 'product_rating' => 5])->assertForbidden();
+        $this->actingAs($stranger)->post("/orders/{$order->id}/review", ['rating' => 5, 'product_rating' => 5])->assertForbidden();
     }
 
     public function test_rating_must_be_between_one_and_five(): void
     {
         [, $buyer, $order] = $this->completedOrder();
 
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 6])
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 6, 'product_rating' => 5])
             ->assertSessionHasErrors('rating');
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 0])
-            ->assertSessionHasErrors('rating');
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 3, 'product_rating' => 0])
+            ->assertSessionHasErrors('product_rating');
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 3])
+            ->assertSessionHasErrors('product_rating');
     }
 
     public function test_profile_shows_average_rating(): void
     {
         [$seller, $buyer, $order] = $this->completedOrder();
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 4]);
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 4, 'product_rating' => 4]);
 
         $this->actingAs($buyer)->get("/users/{$seller->id}")
             ->assertOk()

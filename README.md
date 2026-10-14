@@ -76,3 +76,39 @@ php artisan test
 - **Reports** – report listings or users; admins triage at `/admin/reports`.
 - **Admin panel** – `/admin` (stats, users, listings, reports). Admin = `users.role = 'admin'`.
 - **Order integrity** – transactions + row locks, enforced status transitions, Policies for listings/orders.
+
+
+## Dashboard, attachments, product ratings & transaction reports
+
+After copying these files over the project:
+
+```bash
+php artisan migrate        # 7 new migrations (quantity, attachments, ratings, report fields...)
+composer run dev
+php artisan test           # 98 tests
+```
+
+### Allow bigger uploads (needed for videos)
+
+PHP's defaults (2 MB per file) are too small for chat and review videos. Edit
+your `php.ini` (run `php --ini` to find it), then restart `composer run dev`:
+
+```ini
+upload_max_filesize = 32M
+post_max_size = 64M
+max_file_uploads = 20
+```
+
+The app accepts files up to 25 MB each (5 per chat message, 4 per review).
+
+### Where to put your own pictures
+
+`resources/js/config/siteImages.ts` lists every image slot. Put the file in
+`public/images/` and type its name there. Missing files show a green placeholder
+that prints the name it expects.
+
+### Files that are no longer used (safe to delete)
+
+- `resources/css/dashboard.css` (the shell is now Tailwind)
+- `resources/js/pages/Admin/Dashboard.tsx` (the admin overview moved to `/dashboard`)
+- The old landing components: `Navbar.tsx`, `Hero.tsx`, `Stats.tsx`, `Features.tsx`, `HowItWorks.tsx`, `Safety.tsx`, `CTA.tsx`, `Footer.tsx` and `acc-home.css`

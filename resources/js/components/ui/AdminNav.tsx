@@ -1,35 +1,39 @@
 import { Link, usePage } from '@inertiajs/react';
+import { Flag, LayoutDashboard, Package, ReceiptText, ShieldCheck, Users } from 'lucide-react';
+import PageHeader from './PageHeader';
 
 const tabs = [
-    { label: 'Overview', href: '/admin' },
-    { label: 'Users', href: '/admin/users' },
-    { label: 'Listings', href: '/admin/listings' },
-    { label: 'Reports', href: '/admin/reports' },
+    { label: 'Overview', href: '/dashboard', icon: LayoutDashboard },
+    { label: 'Reports', href: '/admin/reports', icon: Flag },
+    { label: 'Transactions', href: '/admin/orders', icon: ReceiptText },
+    { label: 'Listings', href: '/admin/listings', icon: Package },
+    { label: 'Users', href: '/admin/users', icon: Users },
 ];
 
-export default function AdminNav({ title }: { title: string }) {
+export default function AdminNav({ title, subtitle }: { title: string; subtitle?: string }) {
     const { url } = usePage();
     const path = url.split('?')[0];
 
     return (
-        <div className="mb-6">
-            <h1 className="text-2xl font-bold text-[#17352A]">{title}</h1>
+        <>
+            <PageHeader icon={ShieldCheck} title={title} subtitle={subtitle} />
 
-            <nav className="mt-4 flex flex-wrap gap-2" aria-label="Admin">
-                {tabs.map((tab) => (
+            <nav className="-mt-2 mb-6 flex flex-wrap gap-2" aria-label="Admin sections">
+                {tabs.map(({ label, href, icon: Icon }) => (
                     <Link
-                        key={tab.href}
-                        href={tab.href}
-                        className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                            path === tab.href
-                                ? 'bg-[#176B4D] text-white'
-                                : 'border border-[#DDE6E0] bg-white text-slate-600 hover:border-[#176B4D] hover:text-[#176B4D]'
+                        key={href}
+                        href={href}
+                        className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition ${
+                            path === href
+                                ? 'bg-pine-800 text-white'
+                                : 'border border-mist-200 bg-white text-ink-2 hover:border-pine-700 hover:text-pine-800'
                         }`}
                     >
-                        {tab.label}
+                        <Icon size={15} />
+                        {label}
                     </Link>
                 ))}
             </nav>
-        </div>
+        </>
     );
 }

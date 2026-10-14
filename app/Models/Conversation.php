@@ -37,6 +37,11 @@ class Conversation extends Model
 
     public function latestMessage(): HasOne
     {
-        return $this->hasOne(Message::class)->latestOfMany();
+        // The newest message the signed-in person can still see, so a message
+        // they deleted for themselves never shows up as the inbox preview.
+        return $this->hasOne(Message::class)->ofMany(
+            ['id' => 'max'],
+            fn ($query) => $query->visibleTo((int) auth()->id())
+        );
     }
 }

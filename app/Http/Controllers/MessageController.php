@@ -2,74 +2,53 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Attachment;
 use App\Models\Conversation;
 use App\Models\Listing;
 use App\Models\Message;
 use App\Models\Order;
-use Illuminate\Http\JsonResponse;
+use App\Support\Attachments;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class MessageController extends Controller
 {
-    /** Columns of a user that are safe to show the other party. */
-    private const PUBLIC_USER = ':id,name,avatar_path';
+    private const MAX_FILES = 5;
 
     public function index(Request $request): Response
     {
         $userId = $request->user()->id;
 
+        $conversations = Conversation::query()
+            ->where(function ($query) use ($userId) {
+                $query
+                    ->where('buyer_id', $userId)
+                    ->orWhere('seller_id', $userId);
+            })
+            ->with([
+                'listing.category',
+                'listing.images',
+                'buyer:id,name,avatar_path',
+                'seller:id,name,avatar_path',
+                'latestMessage.attachments',
+            ])
+            ->withMax('messages', 'created_at')
+            ->withCount([
+                'messages as unread_messages_count' => function ($query) use ($userId) {
+                    $query
+                        ->whereNull('read_at')
+                        ->where('sender_id', '!=', $userId)
+                        ->liveFor($userId);
+                },
+            ])
+            ->latest('messages_max_created_at')
+            ->get();
+
         return Inertia::render('Messages/Index', [
-            'conversations' => $this->conversationList($userId),
+            'conversations' => $conversations,
             'currentUserId' => $userId,
-        ]);
-    }
-
-    /**
-     * JSON copy of the conversation list. The inbox polls this so new
-     * messages show up without a page refresh.
-     */
-    public function list(Request $request): JsonResponse
-    {
-        return response()->json([
-            'conversations' => $this->conversationList($request->user()->id),
-        ]);
-    }
-
-    /**
-     * Tiny JSON payload polled from every page: the unread count and the
-     * newest unread message (used for the "new message" pop-up).
-     */
-    public function summary(Request $request): JsonResponse
-    {
-        $userId = $request->user()->id;
-
-        $unread = Message::query()
-            ->whereNull('read_at')
-            ->where('sender_id', '!=', $userId)
-            ->whereHas('conversation', fn ($q) => $q
-                ->where('buyer_id', $userId)
-                ->orWhere('seller_id', $userId));
-
-        $latest = (clone $unread)
-            ->with(['sender'.self::PUBLIC_USER, 'attachments:id,attachable_id,attachable_type,kind,original_name'])
-            ->latest('id')
-            ->first();
-
-        return response()->json([
-            'unread_count' => (clone $unread)->count(),
-            'latest' => $latest ? [
-                'id' => $latest->id,
-                'conversation_id' => $latest->conversation_id,
-                'sender_name' => $latest->sender?->name,
-                'sender_avatar_url' => $latest->sender?->avatar_url,
-                'preview' => $this->preview($latest),
-            ] : null,
         ]);
     }
 
@@ -128,179 +107,128 @@ class MessageController extends Controller
     ): Response {
         $userId = $request->user()->id;
 
-        $this->authorizeParticipant($conversation, $userId);
+        abort_unless(
+            $conversation->buyer_id === $userId ||
+            $conversation->seller_id === $userId,
+            403
+        );
 
-        $this->markRead($conversation, $userId);
+        $conversation->messages()
+            ->whereNull('read_at')
+            ->where('sender_id', '!=', $userId)
+            ->update([
+                'read_at' => now(),
+            ]);
 
         $conversation->load([
             'listing.category',
             'listing.images',
-            'buyer'.self::PUBLIC_USER,
-            'seller'.self::PUBLIC_USER,
-            'messages.sender'.self::PUBLIC_USER,
+            'buyer:id,name,avatar_path',
+            'seller:id,name,avatar_path',
+            // Leave out what this person deleted for themselves. Messages the
+            // sender deleted for everyone stay as an empty "deleted" bubble
+            // (Message::toArray strips their text and files).
+            'messages' => fn ($query) => $query->visibleTo($userId)->orderBy('id'),
+            'messages.sender:id,name,avatar_path',
             'messages.attachments',
         ]);
+
+        // The order (if any) between these two people for this listing,
+        // so the chat can link to it and offer "Report transaction".
+        $order = Order::query()
+            ->where('listing_id', $conversation->listing_id)
+            ->where('buyer_id', $conversation->buyer_id)
+            ->where('seller_id', $conversation->seller_id)
+            ->latest()
+            ->first(['id', 'status', 'quantity', 'price']);
 
         return Inertia::render('Messages/Show', [
             'conversation' => $conversation,
             'currentUserId' => $userId,
-            'limits' => [
-                'max_files' => 5,
-                'max_megabytes' => (int) (Attachment::MAX_KILOBYTES / 1024),
-                'extensions' => Attachment::ALLOWED_EXTENSIONS,
-            ],
-        ]);
-    }
-
-    /**
-     * Messages newer than `after`, plus which of my own messages the other
-     * person has read. Polled every few seconds by the open chat.
-     */
-    public function poll(
-        Request $request,
-        Conversation $conversation
-    ): JsonResponse {
-        $userId = $request->user()->id;
-
-        $this->authorizeParticipant($conversation, $userId);
-
-        $after = max(0, (int) $request->query('after', 0));
-
-        $this->markRead($conversation, $userId);
-
-        $messages = $conversation->messages()
-            ->where('id', '>', $after)
-            ->with(['sender'.self::PUBLIC_USER, 'attachments'])
-            ->orderBy('id')
-            ->limit(100)
-            ->get();
-
-        $readIds = $conversation->messages()
-            ->where('sender_id', $userId)
-            ->whereNotNull('read_at')
-            ->latest('id')
-            ->limit(200)
-            ->pluck('id');
-
-        return response()->json([
-            'messages' => $messages,
-            'read_ids' => $readIds,
+            'order' => $order,
         ]);
     }
 
     public function store(
         Request $request,
         Conversation $conversation
-    ): RedirectResponse|JsonResponse {
+    ): RedirectResponse {
         $userId = $request->user()->id;
 
-        $this->authorizeParticipant($conversation, $userId);
-
-        $validated = $request->validate([
-            'body' => ['nullable', 'string', 'max:5000'],
-            'attachments' => ['nullable', 'array', 'max:5'],
-            'attachments.*' => Attachment::fileRules(),
-        ]);
-
-        $body = trim((string) ($validated['body'] ?? ''));
-        $files = $request->file('attachments', []);
-
-        if ($body === '' && count($files) === 0) {
-            throw ValidationException::withMessages([
-                'body' => 'Write a message or attach a file.',
-            ]);
-        }
-
-        $message = $conversation->messages()->create([
-            'sender_id' => $userId,
-            // The column is NOT NULL; attachment-only messages store ''.
-            'body' => $body,
-        ]);
-
-        foreach ($files as $file) {
-            $message->attachments()->create(
-                Attachment::storeUpload($file, 'message-attachments')
-            );
-        }
-
-        if ($request->expectsJson()) {
-            $message->load(['sender'.self::PUBLIC_USER, 'attachments']);
-
-            return response()->json(['message' => $message], 201);
-        }
-
-        return back();
-    }
-
-    private function authorizeParticipant(Conversation $conversation, int $userId): void
-    {
         abort_unless(
             $conversation->buyer_id === $userId ||
             $conversation->seller_id === $userId,
             403
         );
-    }
 
-    private function markRead(Conversation $conversation, int $userId): void
-    {
-        $conversation->messages()
-            ->whereNull('read_at')
-            ->where('sender_id', '!=', $userId)
-            ->update(['read_at' => now()]);
-    }
+        $validated = $request->validate(
+            [
+                'body' => ['nullable', 'string', 'max:5000', 'required_without:attachments'],
+                ...Attachments::rules('attachments', self::MAX_FILES, Attachments::CHAT_TYPES),
+            ],
+            [
+                'body.required_without' => 'Type a message or attach a file.',
+                ...Attachments::messages('attachments', self::MAX_FILES, Attachments::CHAT_TYPES),
+            ]
+        );
 
-    private function preview(Message $message): string
-    {
-        $body = trim($message->body);
+        $message = $conversation->messages()->create([
+            'sender_id' => $userId,
+            'body' => $validated['body'] ?? null,
+        ]);
 
-        if ($body !== '') {
-            return mb_strimwidth($body, 0, 90, '…');
-        }
+        // Chat files are private: stored on the local disk and served through
+        // AttachmentController, never directly from /storage.
+        Attachments::store(
+            $message,
+            $request->file('attachments', []),
+            'local',
+            "message-attachments/{$conversation->id}"
+        );
 
-        $first = $message->attachments->first();
-
-        return match ($first?->kind) {
-            'image' => 'Sent a photo',
-            'video' => 'Sent a video',
-            default => 'Sent a file',
-        };
+        return back();
     }
 
     /**
-     * @return Collection<int, Conversation>
+     * Delete one message, either just for the person asking ("me") or, if they
+     * sent it, for both people in the chat ("everyone"). Text, photos, videos
+     * and files all go together because they belong to the same message.
      */
-    private function conversationList(int $userId): Collection
-    {
-        $conversations = Conversation::query()
-            ->where(function ($query) use ($userId) {
-                $query
-                    ->where('buyer_id', $userId)
-                    ->orWhere('seller_id', $userId);
-            })
-            ->with([
-                'listing.category',
-                'listing.images',
-                'buyer'.self::PUBLIC_USER,
-                'seller'.self::PUBLIC_USER,
-                'latestMessage.attachments:id,attachable_id,attachable_type,kind,original_name',
-            ])
-            ->withMax('messages', 'created_at')
-            ->withCount([
-                'messages as unread_messages_count' => function ($query) use ($userId) {
-                    $query
-                        ->whereNull('read_at')
-                        ->where('sender_id', '!=', $userId);
-                },
-            ])
-            ->latest('messages_max_created_at')
-            ->get();
+    public function destroy(
+        Request $request,
+        Conversation $conversation,
+        Message $message
+    ): RedirectResponse {
+        $user = $request->user();
 
-        return $conversations->each(function (Conversation $conversation) {
-            $conversation->setAttribute(
-                'last_message_preview',
-                $conversation->latestMessage ? $this->preview($conversation->latestMessage) : null
-            );
-            $conversation->unsetRelation('latestMessage');
-        });
+        abort_unless(
+            $conversation->buyer_id === $user->id ||
+            $conversation->seller_id === $user->id,
+            403
+        );
+
+        // The message must belong to this conversation, otherwise someone
+        // could pass their own conversation id with another chat's message id.
+        abort_unless($message->conversation_id === $conversation->id, 404);
+
+        $validated = $request->validate([
+            'scope' => ['required', Rule::in(['me', 'everyone'])],
+        ]);
+
+        if ($validated['scope'] === 'everyone') {
+            // Only the sender can pull a message back from the other person.
+            abort_unless($message->sender_id === $user->id, 403);
+
+            if ($message->deleted_for_everyone_at === null) {
+                $message->forceFill(['deleted_for_everyone_at' => now()])->save();
+            }
+
+            return back()->with('success', 'Message deleted for everyone.');
+        }
+
+        // "Delete for me" works on any message in the chat, sent or received.
+        $message->hiddenBy()->syncWithoutDetaching([$user->id]);
+
+        return back()->with('success', 'Message deleted for you.');
     }
 }

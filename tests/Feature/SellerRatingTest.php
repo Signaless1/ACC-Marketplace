@@ -145,7 +145,7 @@ class SellerRatingTest extends TestCase
         $buyer = User::factory()->create();
         $order = $this->makeOrder($this->makeListing($seller), $buyer, 'completed');
 
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 4, 'comment' => 'Good'])
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 4, 'product_rating' => 4, 'comment' => 'Good'])
             ->assertSessionHas('success');
 
         $this->actingAs($buyer)->get("/users/{$seller->id}")
@@ -162,8 +162,8 @@ class SellerRatingTest extends TestCase
         $buyer = User::factory()->create();
         $order = $this->makeOrder($this->makeListing($seller), $buyer, 'completed');
 
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 5]);
-        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 1])
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 5, 'product_rating' => 5]);
+        $this->actingAs($buyer)->post("/orders/{$order->id}/review", ['rating' => 1, 'product_rating' => 1])
             ->assertSessionHas('error');
 
         $summary = SellerRating::summary($seller->id);

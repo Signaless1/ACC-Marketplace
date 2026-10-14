@@ -2,20 +2,17 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\ListingRequest;
 use App\Models\Category;
 use App\Models\Listing;
-use Illuminate\Database\Eloquent\Builder;
+use App\Models\Report;
+use App\Models\Review;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Inertia\Inertia;
-use Inertia\Response;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
-use App\Models\Order;
-use App\Models\Review;
-use App\Support\ProductRating;
-use App\Support\SellerRating;
-use Illuminate\Validation\Rule;
+use Inertia\Inertia;
+use Inertia\Response;
 
 class ListingController extends Controller
 {
@@ -23,30 +20,25 @@ class ListingController extends Controller
     {
         $listings = Listing::query()
             ->with(['category', 'images'])
+            ->withCount(['favorites', 'orders as open_orders_count' => fn ($q) => $q
+                ->whereIn('status', ['pending', 'confirmed'])])
+            ->withAvg('reviews as rating_avg', 'product_rating')
+            ->withCount(['reviews as rating_count' => fn ($q) => $q->whereNotNull('product_rating')])
             ->where('user_id', $request->user()->id)
-            ->when(
-                in_array($request->query('status'), ['available', 'reserved', 'sold'], true),
-                fn ($q) => $q->where('status', $request->query('status'))
-            )
             ->latest()
             ->paginate(12)
             ->withQueryString();
 
         return Inertia::render('Listings/Index', [
             'listings' => $listings,
-            'status' => $request->query('status'),
         ]);
     }
 
     public function create(): Response
     {
-        $categories = Category::query()
-            ->orderBy('name')
-            ->get();
-
         return Inertia::render('Listings/Create', [
-            'categories' => $categories,
-            'limits' => self::limits(),
+            'categories' => Category::query()->orderBy('name')->get(),
+            'limits' => $this->limits(),
         ]);
     }
 
@@ -54,315 +46,262 @@ class ListingController extends Controller
     {
         $user = $request->user();
 
-        // Hidden listings behave like they do not exist for other users.
+        // Removed listings behave like they do not exist for other users.
         abort_unless(Gate::forUser($user)->allows('view', $listing), 404);
 
-        $isOwner = $user->id === $listing->user_id;
-
-        if (! $isOwner) {
-            Listing::withoutTimestamps(fn () => $listing->increment('views_count'));
+        // Count a view once per session, never for the owner.
+        if ($user->id !== $listing->user_id && ! $request->session()->has("viewed.{$listing->id}")) {
+            Listing::query()->whereKey($listing->id)->increment('views_count');
+            $request->session()->put("viewed.{$listing->id}", true);
         }
 
-        // Only expose the public seller fields the page needs (no email,
-        // role, suspension state, etc.).
         $listing->load([
             'seller:id,name,avatar_path,created_at',
             'category',
             'images',
+            'remover:id,name',
+        ]);
+        $listing->loadAvg('reviews as rating_avg', 'product_rating');
+        $listing->loadCount([
+            'reviews as rating_count' => fn ($q) => $q->whereNotNull('product_rating'),
+            'favorites',
         ]);
 
-        $rating = SellerRating::summary($listing->user_id);
-        $productRating = ProductRating::summary($listing->id);
+        $soldUnits = (int) $listing->orders()
+            ->where('status', 'completed')
+            ->sum('quantity');
+
+        $sellerStats = Review::query()
+            ->where('seller_id', $listing->user_id)
+            ->selectRaw('COUNT(*) as total, AVG(rating) as average')
+            ->first();
+
+        $breakdown = Review::query()
+            ->where('listing_id', $listing->id)
+            ->whereNotNull('product_rating')
+            ->selectRaw('product_rating, COUNT(*) as total')
+            ->groupBy('product_rating')
+            ->pluck('total', 'product_rating');
 
         $reviews = Review::query()
             ->where('listing_id', $listing->id)
-            ->with([
-                'reviewer:id,name,avatar_path',
-                'attachments',
-            ])
+            ->whereNotNull('product_rating')
+            ->with(['reviewer:id,name,avatar_path', 'attachments'])
             ->latest()
             ->take(20)
             ->get();
 
-        $browse = fn (Builder $q) => $q
-            ->visible()
-            ->where('status', 'available')
-            ->whereKeyNot($listing->id)
-            ->with(['category', 'images', 'seller:id,name'])
-            ->withProductRating();
+        // A completed order of this item that the buyer has not reviewed yet.
+        $reviewableOrder = $user->id === $listing->user_id
+            ? null
+            : $listing->orders()
+                ->where('buyer_id', $user->id)
+                ->where('status', 'completed')
+                ->doesntHave('review')
+                ->first(['id']);
 
-        $fromSeller = Listing::query()
-            ->tap($browse)
+        $sellerOtherListings = Listing::query()
+            ->visible()
+            ->forCards()
             ->where('user_id', $listing->user_id)
+            ->whereKeyNot($listing->id)
+            ->where('quantity', '>', 0)
             ->latest()
-            ->take(8)
+            ->take(6)
             ->get();
 
         $similar = Listing::query()
-            ->tap($browse)
+            ->visible()
+            ->forCards()
             ->where('category_id', $listing->category_id)
+            ->whereKeyNot($listing->id)
             ->where('user_id', '!=', $listing->user_id)
+            ->where('quantity', '>', 0)
+            ->orderByDesc('favorites_count')
             ->latest()
             ->take(8)
             ->get();
 
-        $shownIds = $fromSeller->pluck('id')->merge($similar->pluck('id'));
-
-        $discover = Listing::query()
-            ->tap($browse)
-            ->whereNotIn('id', $shownIds)
-            ->inRandomOrder()
+        $featured = Listing::query()
+            ->visible()
+            ->forCards()
+            ->whereKeyNot($listing->id)
+            ->whereNotIn('id', $similar->pluck('id'))
+            ->where('user_id', '!=', $user->id)
+            ->where('quantity', '>', 0)
+            ->orderByDesc('favorites_count')
+            ->orderByDesc('views_count')
             ->take(8)
             ->get();
 
         return Inertia::render('Listings/Show', [
             'listing' => $listing,
-            'canEdit' => $isOwner,
+            'canEdit' => $user->id === $listing->user_id,
             'isFavorited' => $user->favorites()
                 ->where('listing_id', $listing->id)
                 ->exists(),
+            'soldUnits' => $soldUnits,
             'sellerRating' => [
-                'average' => $rating['average'],
-                'count' => $rating['count'],
+                'average' => $sellerStats->average
+                    ? round((float) $sellerStats->average, 1)
+                    : null,
+                'count' => (int) $sellerStats->total,
             ],
-            'sellerStats' => [
-                'active_listings' => Listing::query()
-                    ->where('user_id', $listing->user_id)
-                    ->where('status', 'available')
-                    ->whereNull('hidden_at')
-                    ->count(),
-                'completed_sales' => Order::query()
-                    ->where('seller_id', $listing->user_id)
-                    ->where('status', 'completed')
-                    ->count(),
+            'ratingBreakdown' => [
+                5 => (int) ($breakdown[5] ?? 0),
+                4 => (int) ($breakdown[4] ?? 0),
+                3 => (int) ($breakdown[3] ?? 0),
+                2 => (int) ($breakdown[2] ?? 0),
+                1 => (int) ($breakdown[1] ?? 0),
             ],
-            'productRating' => $productRating,
             'reviews' => $reviews,
-            // A completed, not-yet-reviewed order between this viewer and the seller.
-            'reviewableOrderId' => $isOwner
-                ? null
-                : Order::query()
-                    ->where('buyer_id', $user->id)
-                    ->where('seller_id', $listing->user_id)
-                    ->where('status', 'completed')
-                    ->doesntHave('review')
-                    ->latest()
-                    ->value('id'),
-            // Same, but for an order of this exact product, so the review
-            // can be written right on this page.
-            'listingReviewOrderId' => $isOwner
-                ? null
-                : Order::query()
-                    ->where('buyer_id', $user->id)
-                    ->where('listing_id', $listing->id)
-                    ->where('status', 'completed')
-                    ->doesntHave('review')
-                    ->latest()
-                    ->value('id'),
-            'fromSeller' => $fromSeller,
-            'similar' => $similar,
-            'discover' => $discover,
-            'favoriteIds' => $user->favorites()->pluck('listing_id'),
-            'reportReasons' => \App\Models\Report::REASONS,
-            'limits' => self::limits(),
+            'reviewableOrder' => $reviewableOrder,
+            'reviewableOrderId' => $reviewableOrder?->id,
+            'sellerOtherListings' => $sellerOtherListings,
+            'similarListings' => $similar,
+            'featuredListings' => $featured,
+            'reportReasons' => Report::REASONS,
         ]);
     }
 
+    public function store(ListingRequest $request): RedirectResponse
+    {
+        $validated = $request->validated();
+
+        $listing = Listing::create([
+            'user_id' => $request->user()->id,
+            'category_id' => $validated['category_id'],
+            'title' => $validated['title'],
+            'slug' => str()->slug($validated['title']).'-'.uniqid(),
+            'description' => $validated['description'],
+            'price' => $validated['price'],
+            'quantity' => $validated['quantity'],
+            'type' => $validated['type'],
+            'status' => 'available',
+            'condition' => $validated['condition'] ?? null,
+        ]);
+
+        $this->storeImages($listing, $request->file('images', []), 0);
+
+        return redirect()
+            ->route('listings.show', $listing)
+            ->with('success', 'Your listing is live.');
+    }
+
+    public function edit(Request $request, Listing $listing): Response
+    {
+        Gate::authorize('update', $listing);
+
+        $listing->load('images');
+
+        return Inertia::render('Listings/Edit', [
+            'listing' => $listing,
+            'categories' => Category::query()->orderBy('name')->get(),
+            'limits' => $this->limits(),
+        ]);
+    }
+
+    public function update(ListingRequest $request, Listing $listing): RedirectResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $validated = $request->validated();
+
+        $imagesToRemove = $listing->images()
+            ->whereIn('id', $validated['remove_images'] ?? [])
+            ->get();
+
+        $newImages = $request->file('images', []);
+
+        $remaining = $listing->images()->count() - $imagesToRemove->count();
+
+        if ($remaining + count($newImages) > Listing::MAX_IMAGES) {
+            return back()->withErrors([
+                'images' => 'A listing can have at most '.Listing::MAX_IMAGES.' photos.',
+            ]);
+        }
+
+        foreach ($imagesToRemove as $image) {
+            Storage::disk('public')->delete($image->path);
+            $image->delete();
+        }
+
+        $listing->update([
+            'category_id' => $validated['category_id'],
+            'title' => $validated['title'],
+            'description' => $validated['description'],
+            'price' => $validated['price'],
+            'quantity' => $validated['quantity'],
+            'type' => $validated['type'],
+            'condition' => $validated['condition'] ?? null,
+        ]);
+
+        // Stock edits change availability; keep the status in step with them.
+        $listing->syncStatus();
+
+        $this->storeImages(
+            $listing,
+            $newImages,
+            ($listing->images()->max('sort_order') ?? -1) + 1
+        );
+
+        return redirect()
+            ->route('listings.show', $listing)
+            ->with('success', 'Listing updated.');
+    }
+
+    public function destroy(Request $request, Listing $listing): RedirectResponse
+    {
+        Gate::authorize('delete', $listing);
+
+        // Orders still in progress must be finished or cancelled first.
+        if ($listing->orders()->whereIn('status', ['pending', 'confirmed'])->exists()) {
+            return back()->with(
+                'error',
+                'This listing has open orders. Complete or cancel them before deleting it.'
+            );
+        }
+
+        $listing->load('images');
+
+        foreach ($listing->images as $image) {
+            Storage::disk('public')->delete($image->path);
+        }
+
+        $listing->delete();
+
+        return redirect()
+            ->route('listings.index')
+            ->with('success', 'Listing deleted.');
+    }
+
     /**
-     * Validation rules shared by create and update.
-     *
-     * @return array<string, array<int, mixed>>
+     * @param  array<int, \Illuminate\Http\UploadedFile>  $files
      */
-    private function rules(): array
+    private function storeImages(Listing $listing, array $files, int $startAt): void
     {
-        return [
-            'category_id' => ['required', 'integer', 'exists:categories,id'],
-            'title' => ['required', 'string', 'min:'.Listing::TITLE_MIN, 'max:'.Listing::TITLE_MAX],
-            'description' => ['required', 'string', 'min:'.Listing::DESCRIPTION_MIN, 'max:'.Listing::DESCRIPTION_MAX],
-            // Whole or two-decimal amounts only, within a sensible range.
-            'price' => [
-                'required',
-                'numeric',
-                'decimal:0,2',
-                'min:'.Listing::PRICE_MIN,
-                'max:'.Listing::PRICE_MAX,
-            ],
-            'quantity' => [
-                'required',
-                'integer',
-                'min:'.Listing::QUANTITY_MIN,
-                'max:'.Listing::QUANTITY_MAX,
-            ],
-            'type' => ['required', 'in:item,service'],
-            'condition' => ['nullable', 'string', Rule::in(Listing::CONDITIONS)],
-        ];
-    }
-
-    /** Limits the forms display (kept in one place with the rules above). */
-    public static function limits(): array
-    {
-        return [
-            'title' => ['min' => Listing::TITLE_MIN, 'max' => Listing::TITLE_MAX],
-            'description' => ['min' => Listing::DESCRIPTION_MIN, 'max' => Listing::DESCRIPTION_MAX],
-            'price' => ['min' => Listing::PRICE_MIN, 'max' => Listing::PRICE_MAX],
-            'quantity' => ['min' => Listing::QUANTITY_MIN, 'max' => Listing::QUANTITY_MAX],
-        ];
-    }
-
-   public function store(Request $request): RedirectResponse
-{
-    $validated = $request->validate([
-        ...$this->rules(),
-        'images' => ['nullable', 'array', 'max:5'],
-        'images.*' => ['image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
-    ]);
-
-    $listing = Listing::create([
-        'user_id' => $request->user()->id,
-        'category_id' => $validated['category_id'],
-        'title' => $validated['title'],
-        'slug' => str()->slug($validated['title']) . '-' . uniqid(),
-        'description' => $validated['description'],
-        'price' => $validated['price'],
-        'quantity' => $validated['quantity'],
-        'type' => $validated['type'],
-        'status' => 'available',
-        'condition' => $validated['condition'] ?? null,
-    ]);
-
-    if ($request->hasFile('images')) {
-        foreach ($request->file('images') as $index => $image) {
-            $path = $image->store('listings', 'public');
-
+        foreach (array_values($files) as $index => $image) {
             $listing->images()->create([
-                'path' => $path,
-                'sort_order' => $index,
+                'path' => $image->store('listings', 'public'),
+                'sort_order' => $startAt + $index,
             ]);
         }
     }
 
-    return redirect()
-        ->route('marketplace')
-        ->with('success', 'Listing created successfully.');
-}
-
-
-public function edit(Request $request, Listing $listing): Response
-{
-    Gate::authorize('update', $listing);
-
-    
-
-    $listing->load('images');
-
-    $categories = Category::query()
-        ->orderBy('name')
-        ->get();
-
-    return Inertia::render('Listings/Edit', [
-        'listing' => $listing,
-        'categories' => $categories,
-        'limits' => self::limits(),
-    ]);
-}
-
-public function update(Request $request, Listing $listing): RedirectResponse
-{
-    Gate::authorize('update', $listing);
-
-    
-
-    $rules = $this->rules();
-    $wasSoldOut = $listing->quantity === 0;
-
-    // A sold-out listing has 0 units; let its owner save other changes
-    // without being forced to restock.
-    if ($wasSoldOut) {
-        $rules['quantity'] = ['required', 'integer', 'min:0', 'max:'.Listing::QUANTITY_MAX];
+    /**
+     * Limits the form shows to the user (kept in one place with the rules).
+     *
+     * @return array<string, mixed>
+     */
+    private function limits(): array
+    {
+        return [
+            'title' => 100,
+            'description' => 3000,
+            'maxPrice' => Listing::MAX_PRICE,
+            'maxQuantity' => Listing::MAX_QUANTITY,
+            'maxImages' => Listing::MAX_IMAGES,
+            'conditions' => Listing::CONDITIONS,
+        ];
     }
-
-    $validated = $request->validate([
-        ...$rules,
-
-        'remove_images' => ['nullable', 'array'],
-        'remove_images.*' => ['integer', 'exists:listing_images,id'],
-
-        'images' => ['nullable', 'array', 'max:5'],
-        'images.*' => [
-            'image',
-            'mimes:jpeg,png,jpg,webp',
-            'max:5120',
-        ],
-    ]);
-
-    $imagesToRemove = $listing->images()
-        ->whereIn('id', $validated['remove_images'] ?? [])
-        ->get();
-
-    foreach ($imagesToRemove as $image) {
-        Storage::disk('public')->delete($image->path);
-        $image->delete();
-    }
-
-    $newImages = $request->file('images', []);
-
-    $currentImageCount = $listing->images()->count();
-
-    if ($currentImageCount + count($newImages) > 5) {
-        return back()
-            ->withErrors([
-                'images' => 'A listing can have a maximum of 5 images.',
-            ])
-            ->withInput();
-    }
-
-    $listing->update([
-        'category_id' => $validated['category_id'],
-        'title' => $validated['title'],
-        'description' => $validated['description'],
-        'price' => $validated['price'],
-        'quantity' => $validated['quantity'],
-        'type' => $validated['type'],
-        'condition' => $validated['condition'] ?? null,
-    ]);
-
-    // Adding stock reopens a reserved or sold-out listing.
-    if ($wasSoldOut && (int) $validated['quantity'] > 0) {
-        $listing->update(['status' => 'available']);
-    }
-
-    $sortOrder = ($listing->images()->max('sort_order') ?? -1) + 1;
-
-    foreach ($newImages as $image) {
-        $path = $image->store('listings', 'public');
-
-        $listing->images()->create([
-            'path' => $path,
-            'sort_order' => $sortOrder++,
-        ]);
-    }
-
-    return redirect()
-        ->route('listings.show', $listing)
-        ->with('success', 'Listing updated successfully.');
-}
-
-public function destroy(Request $request, Listing $listing): RedirectResponse
-{
-    Gate::authorize('delete', $listing);
-
-    
-
-    $listing->load('images');
-
-    foreach ($listing->images as $image) {
-        Storage::disk('public')->delete($image->path);
-    }
-
-    $listing->delete();
-
-    return redirect()
-        ->route('listings.index')
-        ->with('success', 'Listing deleted successfully.');
-}
 }

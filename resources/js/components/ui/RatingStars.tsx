@@ -16,6 +16,36 @@ const STAR_VALUES = [1, 2, 3, 4, 5];
 const FILLED = 'fill-amber-400 text-amber-400';
 const EMPTY = 'text-slate-300';
 
+/** Compact "★ 4.5 (12)" used on cards, or a quiet empty state. */
+export function RatingBadge({
+    average,
+    count,
+    size = 15,
+    emptyLabel = 'No ratings yet',
+}: {
+    average: number | string | null | undefined;
+    count: number | null | undefined;
+    size?: number;
+    emptyLabel?: string;
+}) {
+    const value = average === null || average === undefined ? null : Number(average);
+
+    if (value === null || Number.isNaN(value) || !count) {
+        return <span className="text-xs font-medium text-ink-500">{emptyLabel}</span>;
+    }
+
+    return (
+        <span
+            className="inline-flex items-center gap-1 text-sm"
+            aria-label={`Rated ${value.toFixed(1)} out of 5 from ${count} rating${count === 1 ? '' : 's'}`}
+        >
+            <Star size={size} aria-hidden="true" className={FILLED} />
+            <span className="font-bold text-ink-900">{value.toFixed(1)}</span>
+            <span className="text-ink-500">({count})</span>
+        </span>
+    );
+}
+
 /**
  * Display mode: read-only stars (fractions render as filled when ≥ n − 0.25).
  * Interactive mode: accessible radio group — click, or use arrow keys / Home / End.
@@ -87,7 +117,7 @@ export default function RatingStars({
                     onMouseEnter={() => setHover(n)}
                     onClick={() => select(n)}
                     onKeyDown={onKeyDown}
-                    className="rounded p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[#176B4D]"
+                    className="rounded p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-coral-600"
                 >
                     <Star
                         size={size}

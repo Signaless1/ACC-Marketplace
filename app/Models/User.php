@@ -12,8 +12,9 @@ use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['name', 'email', 'password', 'bio', 'avatar_path'])]
-#[Hidden(['password', 'remember_token'])]
+#[Fillable(['name', 'email', 'phone', 'password', 'bio', 'avatar_path'])]
+// phone is private: it is only sent to its owner (see HandleInertiaRequests).
+#[Hidden(['password', 'remember_token', 'phone'])]
 class User extends Authenticatable
 {
     protected $appends = ['avatar_url'];

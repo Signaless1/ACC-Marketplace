@@ -2,7 +2,7 @@
 
 namespace App\Http\Middleware;
 
-use App\Models\Message;
+use App\Support\LiveStatus;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -36,28 +36,29 @@ class HandleInertiaRequests extends Middleware
      */
     public function share(Request $request): array
     {
+        $user = $request->user();
+
         return [
             ...parent::share($request),
 
             'auth' => [
-                'user' => $request->user(),
+                // The phone number is hidden on the model so it can never leak
+                // through another page; the owner still sees their own.
+                'user' => $user?->makeVisible('phone'),
             ],
 
-            'unreadMessageCount' => fn () => $request->user()
-                ? Message::query()
-                    ->whereNull('read_at')
-                    ->where('sender_id', '!=', $request->user()->id)
-                    ->whereHas('conversation', function ($query) use ($request) {
-                        $query
-                            ->where('buyer_id', $request->user()->id)
-                            ->orWhere('seller_id', $request->user()->id);
-                    })
-                    ->count()
-                : 0,
+            // Closures: only computed when a page actually needs them.
+            'unreadMessageCount' => fn () => LiveStatus::unread($user),
+            'latestMessage' => fn () => LiveStatus::latestMessage($user),
+            'pendingOrderCount' => fn () => LiveStatus::pendingOrders($user),
+            'pendingReportCount' => fn () => LiveStatus::pendingReports($user),
 
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
+                // Set when the person tried to reach (or just reported) a
+                // suspended user. Shown as a pop-up by SuspendedNotice.
+                'suspended' => fn () => $request->session()->get('suspended'),
             ],
         ];
     }

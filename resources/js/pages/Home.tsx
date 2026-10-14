@@ -1,6 +1,6 @@
 import { Head, Link, usePage } from '@inertiajs/react';
 import {
-    ArrowRight,
+    CheckCircle2,
     Flag,
     MessageCircle,
     ShieldCheck,
@@ -9,51 +9,53 @@ import {
     Tag,
     Users,
 } from 'lucide-react';
+import {
+    CSSProperties,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from 'react';
 import SiteImage from '../components/ui/SiteImage';
 import { logo, siteImages } from '../config/siteImages';
 import type { SharedProps } from '../types/shared';
 
-const gold =
-    'inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-sun-400 px-6 font-display text-[15px] font-bold text-pine-950 shadow-sm transition hover:bg-sun-500';
-const outlineOnLight =
-    'inline-flex h-12 items-center justify-center gap-2 rounded-xl border-2 border-pine-900/25 px-6 font-display text-[15px] font-bold text-pine-900 transition hover:border-pine-900 hover:bg-white';
+/** Stagger delay for entrance and reveal animations. */
+const d = (seconds: number) => ({ '--d': `${seconds}s` }) as CSSProperties;
+
+const h2 =
+    'font-display text-4xl font-extrabold leading-[1.02] tracking-[-0.025em] sm:text-5xl lg:text-6xl';
 
 const categories = [
     {
         name: 'Electronics',
         note: 'Phones, laptops, calculators and accessories',
         image: siteImages.categories.electronics,
-        className: 'col-span-2 row-span-2 min-h-[300px]',
     },
     {
         name: 'Clothing',
         note: 'Uniforms, shoes and bags',
         image: siteImages.categories.clothing,
-        className: 'min-h-[150px]',
     },
     {
         name: 'School Supplies',
         note: 'Books, notebooks and tools',
         image: siteImages.categories.schoolSupplies,
-        className: 'min-h-[150px]',
     },
     {
         name: 'Food & Drinks',
         note: 'Snacks and homemade treats',
         image: siteImages.categories.food,
-        className: 'min-h-[150px]',
     },
     {
         name: 'Home & Living',
         note: 'Dorm and room essentials',
         image: siteImages.categories.home,
-        className: 'min-h-[150px]',
     },
     {
         name: 'Services',
         note: 'Tutoring, printing, repairs and more',
         image: siteImages.categories.services,
-        className: 'col-span-2 min-h-[150px]',
     },
 ];
 
@@ -95,19 +97,27 @@ const trust = [
     },
 ];
 
-function Brand({ light = false }: { light?: boolean }) {
+const perks = [
+    { icon: Tag, label: 'Free to list' },
+    { icon: Users, label: 'Only ACC students' },
+    { icon: Star, label: 'Rated sellers' },
+];
+
+const tips = [
+    'Meet on campus during the day.',
+    'Check the item before you pay.',
+    'Keep the conversation in the app.',
+];
+
+function Brand() {
     return (
-        <Link href="/" className="flex items-center gap-3">
+        <Link href="/" className="group flex items-center gap-3">
             <img
                 src={`/images/${logo}`}
                 alt=""
-                className="h-11 w-11 rounded-full bg-white"
+                className="h-11 w-11 rounded-full bg-white transition-transform duration-500 group-hover:rotate-[14deg]"
             />
-            <span
-                className={`font-display text-xl font-extrabold ${
-                    light ? 'text-white' : 'text-pine-900'
-                }`}
-            >
+            <span className="font-display text-xl font-extrabold text-white">
                 ACC Marketplace
             </span>
         </Link>
@@ -117,9 +127,63 @@ function Brand({ light = false }: { light?: boolean }) {
 export default function Home() {
     const { auth } = usePage<SharedProps>().props;
     const user = auth.user;
+    const root = useRef<HTMLDivElement>(null);
+    const [scrolled, setScrolled] = useState(false);
+    const [open, setOpen] = useState(0);
+    const [slide, setSlide] = useState(0);
+    const Current = trust[slide].icon;
+
+    // Scroll reveals. Only elements that start below the fold are hidden,
+    // and only until they scroll into view, so nothing can stay invisible.
+    useLayoutEffect(() => {
+        const el = root.current;
+
+        if (
+            !el ||
+            !('IntersectionObserver' in window) ||
+            window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ) {
+            return undefined;
+        }
+
+        const below = Array.from(
+            el.querySelectorAll<HTMLElement>('[data-rv]'),
+        ).filter((node) => node.getBoundingClientRect().top > window.innerHeight * 0.9);
+
+        below.forEach((node) => node.classList.add('rv-hide'));
+
+        const io = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.remove('rv-hide');
+                        entry.target.classList.add('rv-show');
+                        io.unobserve(entry.target);
+                    }
+                });
+            },
+            { rootMargin: '0px 0px -8% 0px' },
+        );
+
+        below.forEach((node) => io.observe(node));
+
+        return () => io.disconnect();
+    }, []);
+
+    useEffect(() => {
+        const onScroll = () => setScrolled(window.scrollY > 24);
+
+        onScroll();
+        window.addEventListener('scroll', onScroll, { passive: true });
+
+        return () => window.removeEventListener('scroll', onScroll);
+    }, []);
 
     return (
-        <div className="site bg-white font-body text-pine-950">
+        <div
+            ref={root}
+            className="site overflow-x-clip bg-mist-50 font-body text-pine-950"
+        >
             <Head title="Buy, sell and trade on campus">
                 <meta
                     name="description"
@@ -134,31 +198,41 @@ export default function Home() {
                 Skip to content
             </a>
 
-            {/* Navigation */}
-            <header className="sticky top-0 z-50 border-b border-pine-900/10 bg-white/90 backdrop-blur">
+            {/* Navigation: transparent over the hero, frosted green after scrolling */}
+            <header
+                className={`hx-drop fixed inset-x-0 top-0 z-50 transition-[background-color,box-shadow] duration-300 ${
+                    scrolled
+                        ? 'bg-pine-950/85 shadow-[0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl'
+                        : 'bg-transparent'
+                }`}
+            >
                 <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between gap-6 px-5 sm:px-8">
                     <Brand />
 
                     <nav
-                        className="hidden items-center gap-8 text-[15px] font-medium text-pine-900/75 md:flex"
+                        className="hidden items-center gap-9 text-[15px] font-medium text-white/80 md:flex"
                         aria-label="Sections"
                     >
-                        <a href="#how" className="transition hover:text-pine-700">
-                            How it works
-                        </a>
-                        <a href="#categories" className="transition hover:text-pine-700">
-                            Categories
-                        </a>
-                        <a href="#trust" className="transition hover:text-pine-700">
-                            Safety
-                        </a>
+                        {[
+                            ['#categories', 'Categories'],
+                            ['#how', 'How it works'],
+                            ['#trust', 'Safety'],
+                        ].map(([href, label]) => (
+                            <a
+                                key={href}
+                                href={href}
+                                className="nv transition hover:text-white"
+                            >
+                                {label}
+                            </a>
+                        ))}
                     </nav>
 
                     <div className="flex items-center gap-2 sm:gap-3">
                         {user ? (
                             <Link
                                 href="/dashboard"
-                                className="inline-flex h-10 items-center rounded-lg bg-pine-800 px-5 font-display text-sm font-bold text-white transition hover:bg-pine-900"
+                                className="bt bt-yellow !h-10 !px-5 !text-sm"
                             >
                                 Go to dashboard
                             </Link>
@@ -166,13 +240,13 @@ export default function Home() {
                             <>
                                 <Link
                                     href="/login"
-                                    className="inline-flex h-10 items-center rounded-lg px-4 font-display text-sm font-bold text-pine-900 transition hover:bg-mist-100"
+                                    className="inline-flex h-10 items-center rounded-full px-4 font-display text-sm font-bold text-white transition hover:bg-white/10"
                                 >
                                     Log in
                                 </Link>
                                 <Link
                                     href="/register"
-                                    className="inline-flex h-10 items-center rounded-lg bg-sun-400 px-4 font-display text-sm font-bold text-pine-950 transition hover:bg-sun-500 sm:px-5"
+                                    className="bt bt-yellow !h-10 !px-5 !text-sm"
                                 >
                                     Create account
                                 </Link>
@@ -183,231 +257,370 @@ export default function Home() {
             </header>
 
             <main id="main">
-                {/* Hero */}
-                <section className="relative overflow-hidden bg-mist-50">
-                    <div className="mx-auto grid max-w-7xl items-center gap-14 px-5 pb-20 pt-12 sm:px-8 lg:grid-cols-[1.1fr_0.9fr] lg:pb-28 lg:pt-20">
-                        <div>
-                            <h1 className="site-rise font-display text-[2.75rem] font-extrabold leading-[1.02] text-pine-950 sm:text-6xl lg:text-[4.25rem]">
-                                Buy, sell and trade right on campus.
-                            </h1>
+                {/* Hero: deep green, with the campus on a slanted panel */}
+                <section className="relative isolate min-h-[100svh] overflow-hidden bg-pine-950 text-white">
+                    <div
+                        aria-hidden="true"
+                        className="absolute inset-0 -z-10 opacity-[0.07] [background-image:radial-gradient(#fff_1px,transparent_1px)] [background-size:26px_26px]"
+                    />
 
-                            <p className="site-rise site-rise-2 mt-6 max-w-xl text-lg leading-relaxed text-pine-900/75">
-                                Textbooks, uniforms, gadgets, snacks and
-                                services, listed by Abuyog Community College
-                                students and handed over between classes.
-                            </p>
+                    <div className="hx-photo absolute inset-0 lg:left-auto lg:w-[50%]">
+                        <SiteImage
+                            name={siteImages.hero}
+                            alt="Abuyog Community College campus"
+                            eager
+                            className="absolute inset-0"
+                            imageClassName="hx-zoom object-[66%_45%]"
+                        />
+                        <div className="absolute inset-0 bg-pine-950/75 lg:bg-pine-950/10" />
 
-                            <div className="site-rise site-rise-3 mt-9 flex flex-wrap gap-3">
-                                {user ? (
-                                    <Link href="/marketplace" className={gold}>
-                                        <ShoppingBag size={18} />
-                                        Open the marketplace
-                                    </Link>
-                                ) : (
-                                    <>
-                                        <Link href="/register" className={gold}>
-                                            Create free account
-                                            <ArrowRight size={18} />
-                                        </Link>
-                                        <Link href="/marketplace" className={outlineOnLight}>
-                                            Browse listings
-                                        </Link>
-                                    </>
-                                )}
-                            </div>
-
-                            <ul className="site-rise site-rise-4 mt-10 flex flex-wrap gap-x-7 gap-y-3 text-sm font-medium text-pine-900/75">
-                                <li className="flex items-center gap-2">
-                                    <Tag size={17} className="text-sun-600" />
-                                    Free to list
-                                </li>
-                                <li className="flex items-center gap-2">
-                                    <Users size={17} className="text-sun-600" />
-                                    Only ACC students
-                                </li>
-                                <li className="flex items-center gap-2">
-                                    <Star size={17} className="text-sun-600" />
-                                    Rated sellers
-                                </li>
-                            </ul>
-                        </div>
-
-                        {/* Arch photo */}
-                        <div className="site-rise site-rise-2 relative mx-auto w-full max-w-[420px] pb-8 lg:mx-0 lg:ml-auto">
-                            <div
-                                aria-hidden="true"
-                                className="absolute -right-10 top-10 h-72 w-72 rounded-full bg-sun-300/60 sm:h-96 sm:w-96"
-                            />
-
-                            <SiteImage
-                                name={siteImages.hero}
-                                alt="Abuyog Community College campus"
-                                eager
-                                className="aspect-[4/5] rounded-t-[999px] rounded-b-[2rem] shadow-2xl shadow-pine-950/25"
-                                imageClassName="object-[66%_45%]"
-                            />
-
-                            <div className="absolute -left-3 bottom-0 rounded-full bg-white p-1.5 shadow-xl sm:-left-8">
-                                <img
-                                    src={`/images/${logo}`}
-                                    alt="ACC Marketplace"
-                                    className="h-24 w-24 rounded-full sm:h-28 sm:w-28"
-                                />
-                            </div>
-
-                            <div className="absolute -right-2 bottom-16 w-44 rounded-2xl bg-white p-2 shadow-xl sm:-right-8 sm:w-52">
+                        <div className="hx-card absolute bottom-14 right-8 hidden w-56 md:block">
+                            <div className="rounded-3xl bg-white p-2.5 text-pine-950 shadow-2xl shadow-pine-950/40">
                                 <SiteImage
                                     name={siteImages.heroListing}
                                     alt="Example listing: scientific calculator"
-                                    className="aspect-[4/3] rounded-xl"
+                                    className="aspect-[4/3] rounded-2xl"
                                 />
-                                <div className="px-1.5 pb-1 pt-2.5">
-                                    <p className="truncate text-sm font-semibold text-pine-950">
+                                <div className="px-1.5 pb-1 pt-3">
+                                    <p className="truncate text-sm font-semibold">
                                         Scientific calculator
                                     </p>
                                     <div className="mt-1 flex items-center justify-between">
-                                        <span className="font-display text-base font-extrabold text-pine-900">
+                                        <span className="font-display text-lg font-extrabold text-pine-900">
                                             ₱350
                                         </span>
-                                        <span className="rounded-full bg-mist-100 px-2 py-0.5 text-xs font-semibold text-pine-700">
+                                        <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-sky-800">
                                             Available
                                         </span>
                                     </div>
-                                    <p className="mt-1.5 text-[11px] text-pine-900/50">
+                                    <p className="mt-1.5 text-[11px] text-pine-900/60">
                                         Example listing
                                     </p>
                                 </div>
                             </div>
                         </div>
                     </div>
+
+                    <div
+                        aria-hidden="true"
+                        className="hx-stripe absolute inset-y-0 right-0 hidden w-[50%] bg-sun-400 lg:block"
+                    />
+
+                    <div className="relative mx-auto flex min-h-[100svh] max-w-7xl flex-col justify-center px-5 pb-24 pt-32 sm:px-8">
+                        <div className="max-w-2xl lg:max-w-[46%]">
+                            <h1 className="font-display text-[clamp(2.75rem,5.4vw,5.2rem)] font-extrabold leading-[0.95] tracking-[-0.035em] text-white">
+                                {['Buy, sell and', 'trade right', 'on campus.'].map(
+                                    (line, i) => (
+                                        <span key={line} className="hl block">
+                                            <span style={d(0.15 + i * 0.12)}>
+                                                {line}
+                                            </span>
+                                        </span>
+                                    ),
+                                )}
+                            </h1>
+
+                            <p
+                                className="hx-l mt-7 max-w-lg text-lg leading-relaxed text-white/75"
+                                style={d(0.6)}
+                            >
+                                Textbooks, uniforms, gadgets, snacks and
+                                services, listed by Abuyog Community College
+                                students and handed over between classes.
+                            </p>
+
+                            <div
+                                className="hx-l mt-9 flex flex-wrap gap-3"
+                                style={d(0.75)}
+                            >
+                                {user ? (
+                                    <Link
+                                        href="/marketplace"
+                                        className="bt bt-yellow"
+                                    >
+                                        <ShoppingBag size={18} />
+                                        Open the marketplace
+                                    </Link>
+                                ) : (
+                                    <>
+                                        <Link
+                                            href="/register"
+                                            className="bt bt-yellow"
+                                        >
+                                            Create free account
+                                        </Link>
+                                        <Link
+                                            href="/marketplace"
+                                            className="bt bt-ghost"
+                                        >
+                                            Browse listings
+                                        </Link>
+                                    </>
+                                )}
+                            </div>
+
+                            <ul className="mt-10 flex flex-wrap gap-x-7 gap-y-3 text-sm font-medium text-white/80">
+                                {perks.map(({ icon: Icon, label }, i) => (
+                                    <li
+                                        key={label}
+                                        className="hx-l flex items-center gap-2"
+                                        style={d(0.95 + i * 0.1)}
+                                    >
+                                        <Icon
+                                            size={16}
+                                            className="text-sun-400"
+                                        />
+                                        {label}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div
+                        aria-hidden="true"
+                        className="hx-cue absolute bottom-8 left-5 h-14 w-[2px] overflow-hidden bg-white/20 sm:left-8"
+                    >
+                        <span className="block h-1/3 w-full bg-sun-400" />
+                    </div>
                 </section>
 
-                {/* Categories */}
-                <section id="categories" className="scroll-mt-20 bg-white py-20 lg:py-28">
+                {/* Categories: panels slide open on hover or focus */}
+                <section
+                    id="categories"
+                    className="scroll-mt-20 py-20 lg:py-28"
+                >
                     <div className="mx-auto max-w-7xl px-5 sm:px-8">
-                        <div className="max-w-2xl">
-                            <h2 className="font-display text-4xl font-extrabold leading-tight text-pine-950 sm:text-5xl">
+                        <div className="grid gap-5 md:grid-cols-[1.3fr_0.7fr] md:items-end md:gap-12">
+                            <h2
+                                data-rv
+                                className={`rv-l ${h2} text-pine-950`}
+                            >
                                 Find what you need between classes
                             </h2>
-                            <p className="mt-4 text-lg leading-relaxed text-pine-900/70">
+                            <p
+                                data-rv
+                                className="rv-r text-lg leading-relaxed text-pine-900/70"
+                                style={d(0.1)}
+                            >
                                 Everything is posted by students on the same
                                 campus, so pick-up is a short walk away.
                             </p>
                         </div>
 
-                        <div className="mt-12 grid grid-cols-2 gap-4 md:grid-cols-4">
-                            {categories.map((category) => (
-                                <Link
-                                    key={category.name}
-                                    href={`/marketplace?q=${encodeURIComponent(category.name)}`}
-                                    className={`group relative isolate flex items-end overflow-hidden rounded-2xl ${category.className}`}
-                                >
-                                    <SiteImage
-                                        name={category.image}
-                                        alt={category.name}
-                                        className="absolute inset-0 -z-10"
-                                        imageClassName="transition duration-500 group-hover:scale-105"
-                                    />
-                                    <div className="absolute inset-0 -z-10 bg-gradient-to-t from-pine-950/90 via-pine-950/35 to-transparent" />
+                        <div className="mt-12 grid grid-cols-2 gap-3 md:flex md:h-[30rem]">
+                            {categories.map((category, i) => {
+                                const on = open === i;
 
-                                    <div className="p-5">
-                                        <h3 className="font-display text-xl font-bold text-white sm:text-2xl">
+                                return (
+                                    <Link
+                                        key={category.name}
+                                        href={`/marketplace?q=${encodeURIComponent(category.name)}`}
+                                        onMouseEnter={() => setOpen(i)}
+                                        onFocus={() => setOpen(i)}
+                                        className="pn relative isolate min-h-44 overflow-hidden rounded-[2rem] md:min-h-0 md:basis-0 md:[flex-grow:var(--g)]"
+                                        style={
+                                            {
+                                                '--g': on ? 5 : 1,
+                                            } as CSSProperties
+                                        }
+                                    >
+                                        <SiteImage
+                                            name={category.image}
+                                            alt={category.name}
+                                            className="absolute inset-0 -z-10"
+                                            imageClassName={`transition-transform duration-[1400ms] ease-out ${
+                                                on
+                                                    ? 'md:scale-100'
+                                                    : 'md:scale-125'
+                                            }`}
+                                        />
+                                        <div className="absolute inset-0 -z-10 bg-gradient-to-t from-pine-950/90 via-pine-950/25 to-pine-950/10" />
+
+                                        <span
+                                            aria-hidden="true"
+                                            className={`absolute bottom-6 left-1/2 hidden -translate-x-1/2 rotate-180 font-display text-lg font-bold text-white transition-opacity duration-500 [writing-mode:vertical-rl] md:block ${
+                                                on ? 'opacity-0' : 'opacity-100'
+                                            }`}
+                                        >
                                             {category.name}
-                                        </h3>
-                                        <p className="mt-1 text-sm leading-snug text-white/80">
-                                            {category.note}
-                                        </p>
-                                    </div>
-                                </Link>
-                            ))}
+                                        </span>
 
-                            <Link
-                                href="/marketplace"
-                                className="col-span-2 flex min-h-[150px] flex-col justify-between rounded-2xl bg-sun-400 p-5 text-pine-950 transition hover:bg-sun-500"
-                            >
-                                <ShoppingBag size={28} />
-                                <div>
-                                    <h3 className="font-display text-xl font-bold sm:text-2xl">
-                                        Browse everything
-                                    </h3>
-                                    <p className="mt-1 flex items-center gap-1.5 text-sm font-medium">
-                                        See all listings
-                                        <ArrowRight size={16} />
-                                    </p>
-                                </div>
+                                        <div
+                                            className={`absolute inset-x-0 bottom-0 p-5 transition-all duration-700 md:w-[26rem] md:p-8 ${
+                                                on
+                                                    ? ''
+                                                    : 'md:translate-y-6 md:opacity-0'
+                                            }`}
+                                        >
+                                            <h3 className="font-display text-xl font-extrabold text-white md:text-3xl">
+                                                {category.name}
+                                            </h3>
+                                            <p className="mt-1 max-w-xs text-sm leading-snug text-white/80">
+                                                {category.note}
+                                            </p>
+                                            <span className="mt-4 hidden w-fit rounded-full bg-sun-400 px-4 py-2 font-display text-sm font-bold text-pine-950 md:inline-flex">
+                                                Browse
+                                            </span>
+                                        </div>
+                                    </Link>
+                                );
+                            })}
+                        </div>
+
+                        <div className="mt-8 flex justify-center md:justify-end">
+                            <Link href="/marketplace" className="bt bt-pine">
+                                <ShoppingBag size={18} />
+                                Browse everything
                             </Link>
                         </div>
                     </div>
                 </section>
 
-                {/* How it works */}
-                <section id="how" className="scroll-mt-20 bg-mist-50 py-20 lg:py-28">
-                    <div className="mx-auto max-w-7xl px-5 sm:px-8">
-                        <h2 className="max-w-2xl font-display text-4xl font-extrabold leading-tight text-pine-950 sm:text-5xl">
-                            Selling takes three steps
-                        </h2>
+                {/* How it works: a yellow band with a pinned heading */}
+                <section
+                    id="how"
+                    className="scroll-mt-20 overflow-x-clip bg-sun-400 py-24 lg:py-32"
+                >
+                    <div className="mx-auto grid max-w-7xl gap-12 px-5 sm:px-8 lg:grid-cols-[0.8fr_1.2fr] lg:gap-20">
+                        <div className="lg:sticky lg:top-32 lg:self-start">
+                            <h2
+                                data-rv
+                                className={`rv-l ${h2} text-pine-950`}
+                            >
+                                Selling takes three steps
+                            </h2>
+                        </div>
 
-                        <ol className="mt-12 grid gap-6 md:grid-cols-3">
-                            {steps.map((step, index) => (
+                        <ol className="divide-y divide-pine-900/20">
+                            {steps.map((step, i) => (
                                 <li
                                     key={step.title}
-                                    className="rounded-2xl border-t-[6px] border-sun-400 bg-white p-7 shadow-sm"
+                                    data-rv
+                                    className="rv-r grid grid-cols-[auto_1fr] items-start gap-6 py-10 first:pt-0 md:gap-10"
+                                    style={d(i * 0.08)}
                                 >
-                                    <span className="font-display text-5xl font-extrabold text-pine-700">
-                                        {index + 1}
+                                    <span className="st-num font-display text-7xl font-extrabold leading-none md:text-9xl">
+                                        {i + 1}
                                     </span>
-                                    <h3 className="mt-4 font-display text-xl font-bold text-pine-950">
-                                        {step.title}
-                                    </h3>
-                                    <p className="mt-2 leading-relaxed text-pine-900/70">
-                                        {step.text}
-                                    </p>
+                                    <div className="pt-2">
+                                        <h3 className="font-display text-2xl font-extrabold text-pine-950 md:text-3xl">
+                                            {step.title}
+                                        </h3>
+                                        <p className="mt-3 max-w-md text-lg leading-relaxed text-pine-950/75">
+                                            {step.text}
+                                        </p>
+                                    </div>
                                 </li>
                             ))}
                         </ol>
                     </div>
                 </section>
 
-                {/* Trust & safety */}
-                <section id="trust" className="scroll-mt-20 bg-pine-900 py-20 text-white lg:py-28">
-                    <div className="mx-auto grid max-w-7xl items-center gap-14 px-5 sm:px-8 lg:grid-cols-[1.1fr_0.9fr]">
-                        <div>
-                            <h2 className="max-w-xl font-display text-4xl font-extrabold leading-tight sm:text-5xl">
-                                A marketplace where people know each other
-                            </h2>
+                {/* Safety: slides advance by themselves; hover or tap to take over */}
+                <section
+                    id="trust"
+                    className="scroll-mt-20 bg-pine-900 px-3 py-16 sm:px-6 lg:py-24"
+                >
+                    <div
+                        data-rv
+                        className="st rv-u relative isolate mx-auto max-w-7xl overflow-hidden rounded-[2.25rem] bg-pine-950 sm:rounded-[3rem]"
+                    >
+                        <SiteImage
+                            name={siteImages.community}
+                            alt="Students meeting on campus"
+                            className="absolute inset-0 -z-10"
+                            imageClassName="object-[70%_40%]"
+                        />
+                        <div className="absolute inset-0 -z-10 bg-gradient-to-r from-pine-950 via-pine-950/85 to-pine-950/20" />
 
-                            <div className="mt-10 grid gap-x-8 gap-y-8 sm:grid-cols-2">
-                                {trust.map(({ icon: Icon, title, text }) => (
-                                    <div key={title}>
-                                        <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-sun-400 text-pine-950">
-                                            <Icon size={22} />
+                        <div className="grid gap-10 p-7 sm:p-12 lg:grid-cols-[1.15fr_0.85fr] lg:p-16">
+                            <div className="flex flex-col">
+                                <h2 className={`${h2} max-w-xl text-white`}>
+                                    A marketplace where people know each other
+                                </h2>
+
+                                <div className="mt-10 min-h-[11rem]">
+                                    <div key={slide} className="st-in max-w-md">
+                                        <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sun-400 text-pine-950">
+                                            <Current size={22} />
                                         </span>
-                                        <h3 className="mt-4 font-display text-lg font-bold">
-                                            {title}
+                                        <h3 className="mt-4 font-display text-2xl font-bold text-white">
+                                            {trust[slide].title}
                                         </h3>
-                                        <p className="mt-1.5 leading-relaxed text-white/75">
-                                            {text}
+                                        <p className="mt-2 text-lg leading-relaxed text-white/75">
+                                            {trust[slide].text}
                                         </p>
                                     </div>
-                                ))}
+                                </div>
+
+                                <div className="mt-6 flex gap-3">
+                                    {trust.map(({ icon: Icon, title }, i) => (
+                                        <button
+                                            key={title}
+                                            type="button"
+                                            onClick={() => setSlide(i)}
+                                            aria-label={title}
+                                            aria-current={i === slide}
+                                            className="group flex-1 text-left"
+                                        >
+                                            <span className="relative block h-1 overflow-hidden rounded-full bg-white/20">
+                                                <span
+                                                    key={`${i}-${slide}`}
+                                                    className={`st-bar ${
+                                                        i === slide
+                                                            ? 'st-run'
+                                                            : i < slide
+                                                              ? 'st-done'
+                                                              : ''
+                                                    }`}
+                                                    onAnimationEnd={
+                                                        i === slide
+                                                            ? () =>
+                                                                  setSlide(
+                                                                      (s) =>
+                                                                          (s +
+                                                                              1) %
+                                                                          trust.length,
+                                                                  )
+                                                            : undefined
+                                                    }
+                                                />
+                                            </span>
+                                            <Icon
+                                                size={18}
+                                                className={`mt-3 transition-colors ${
+                                                    i === slide
+                                                        ? 'text-sun-400'
+                                                        : 'text-white/50 group-hover:text-white'
+                                                }`}
+                                            />
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
-                        </div>
 
-                        <div className="relative mx-auto w-full max-w-md lg:mx-0 lg:ml-auto">
-                            <SiteImage
-                                name={siteImages.community}
-                                alt="Students meeting on campus"
-                                className="aspect-[4/5] rounded-3xl"
-                            />
-
-                            <div className="absolute -bottom-6 left-4 right-4 rounded-2xl bg-white p-5 text-pine-950 shadow-xl sm:-left-8 sm:right-8">
-                                <h3 className="font-display text-base font-bold">
+                            <div
+                                data-rv
+                                className="rv-r self-end rounded-[2rem] bg-sun-400 p-7 text-pine-950 lg:ml-auto lg:max-w-sm"
+                                style={d(0.15)}
+                            >
+                                <h3 className="font-display text-xl font-extrabold text-pine-950">
                                     Meet-up tips
                                 </h3>
-                                <ul className="mt-2.5 space-y-1.5 text-sm text-pine-900/75">
-                                    <li>Meet on campus during the day.</li>
-                                    <li>Check the item before you pay.</li>
-                                    <li>Keep the conversation in the app.</li>
+                                <ul className="mt-4 space-y-3 text-[15px] font-medium">
+                                    {tips.map((tip) => (
+                                        <li
+                                            key={tip}
+                                            className="flex items-start gap-2.5"
+                                        >
+                                            <CheckCircle2
+                                                size={18}
+                                                className="mt-0.5 shrink-0 text-pine-800"
+                                            />
+                                            {tip}
+                                        </li>
+                                    ))}
                                 </ul>
                             </div>
                         </div>
@@ -416,30 +629,47 @@ export default function Home() {
 
                 {/* Final call to action */}
                 {!user && (
-                    <section className="bg-white px-5 py-20 sm:px-8 lg:py-28">
-                        <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-8 rounded-3xl bg-sun-400 p-8 sm:p-12 lg:flex-row lg:items-center">
-                            <div className="max-w-xl">
-                                <h2 className="font-display text-3xl font-extrabold leading-tight text-pine-950 sm:text-4xl">
-                                    Got something you don't use anymore?
-                                </h2>
-                                <p className="mt-3 text-lg leading-relaxed text-pine-950/80">
-                                    List it for free and give it a second life
-                                    with another ACC student.
-                                </p>
+                    <section className="relative isolate overflow-hidden bg-pine-800 py-24 text-white lg:py-32">
+                        <div
+                            aria-hidden="true"
+                            className="absolute inset-x-0 top-1/2 -z-10 -translate-y-1/2 select-none overflow-hidden"
+                        >
+                            <div className="hx-ghost flex w-max whitespace-nowrap font-display text-[9rem] font-extrabold leading-none text-transparent [-webkit-text-stroke:1.5px_rgb(255_255_255/0.14)] lg:text-[13rem]">
+                                {Array.from({ length: 8 }).map((_, i) => (
+                                    <span key={i} className="pr-16">
+                                        ACC Marketplace
+                                    </span>
+                                ))}
                             </div>
+                        </div>
 
-                            <div className="flex flex-wrap gap-3">
+                        <div className="mx-auto max-w-4xl px-5 text-center sm:px-8">
+                            <h2
+                                data-rv
+                                className="rv-u font-display text-4xl font-extrabold leading-[1.02] tracking-[-0.025em] text-white sm:text-6xl"
+                            >
+                                Got something you don't use anymore?
+                            </h2>
+                            <p
+                                data-rv
+                                className="rv-u mx-auto mt-5 max-w-xl text-lg leading-relaxed text-white/80"
+                                style={d(0.1)}
+                            >
+                                List it for free and give it a second life
+                                with another ACC student.
+                            </p>
+                            <div
+                                data-rv
+                                className="rv-u mt-9 flex flex-wrap justify-center gap-3"
+                                style={d(0.2)}
+                            >
                                 <Link
                                     href="/register"
-                                    className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-pine-900 px-6 font-display text-[15px] font-bold text-white transition hover:bg-pine-950"
+                                    className="bt bt-yellow"
                                 >
                                     Create free account
-                                    <ArrowRight size={18} />
                                 </Link>
-                                <Link
-                                    href="/login"
-                                    className="inline-flex h-12 items-center justify-center rounded-xl border-2 border-pine-950/40 px-6 font-display text-[15px] font-bold text-pine-950 transition hover:border-pine-950"
-                                >
+                                <Link href="/login" className="bt bt-ghost">
                                     Log in
                                 </Link>
                             </div>
@@ -451,21 +681,33 @@ export default function Home() {
             <footer className="bg-pine-950 py-12 text-white/70">
                 <div className="mx-auto flex max-w-7xl flex-col gap-8 px-5 sm:px-8 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <Brand light />
+                        <Brand />
                         <p className="mt-3 max-w-sm text-sm leading-relaxed">
                             The student marketplace of Abuyog Community
                             College.
                         </p>
                     </div>
 
-                    <nav className="flex flex-wrap gap-x-8 gap-y-3 text-sm font-medium" aria-label="Footer">
-                        <Link href="/marketplace" className="transition hover:text-white">
+                    <nav
+                        className="flex flex-wrap gap-x-8 gap-y-3 text-sm font-medium"
+                        aria-label="Footer"
+                    >
+                        <Link
+                            href="/marketplace"
+                            className="nv transition hover:text-white"
+                        >
                             Marketplace
                         </Link>
-                        <Link href="/login" className="transition hover:text-white">
+                        <Link
+                            href="/login"
+                            className="nv transition hover:text-white"
+                        >
                             Log in
                         </Link>
-                        <Link href="/register" className="transition hover:text-white">
+                        <Link
+                            href="/register"
+                            className="nv transition hover:text-white"
+                        >
                             Create account
                         </Link>
                     </nav>

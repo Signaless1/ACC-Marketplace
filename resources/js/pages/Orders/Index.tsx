@@ -1,507 +1,364 @@
-import { Head, router } from '@inertiajs/react';
-import { useState } from 'react';
+import { Head, Link, router } from '@inertiajs/react';
 import {
     Check,
-    CheckCircle2,
-    FileText,
+    CircleDot,
     Flag,
-    CircleUserRound,
-    Clock3,
     MessageCircle,
     Package,
+    ReceiptText,
     ShoppingBag,
     Star,
     Store,
     X,
 } from 'lucide-react';
+import { useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
+import Avatar from '../../components/ui/Avatar';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import EmptyState from '../../components/ui/EmptyState';
+import PageHeader, { Page } from '../../components/ui/PageHeader';
 import ReviewModal from '../../components/ui/ReviewModal';
-import ReportModal from '../../components/ui/ReportModal';
-import { Link } from '@inertiajs/react';
+import StatusBadge from '../../components/ui/StatusBadge';
+import { useLiveReload } from '../../lib/live';
+import { formatDateTime, formatPrice, timeAgo } from '../../types/shared';
 
-interface UserData {
+interface Person {
     id: number;
     name: string;
-}
-
-interface Category {
-    id: number;
-    name: string;
-}
-
-interface ListingImage {
-    id: number;
-    path: string;
-    sort_order: number;
-}
-
-interface Listing {
-    id: number;
-    title: string;
-    price: number;
-    type: 'item' | 'service';
-    status: 'available' | 'reserved' | 'sold';
-    category: Category;
-    images: ListingImage[];
+    avatar_url: string | null;
 }
 
 interface Order {
     id: number;
-    price: string | number;
-    quantity: number;
+    reference: string;
     status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+    quantity: number;
+    price: string;
+    total: string;
     created_at: string;
-    listing: Listing;
-    buyer?: UserData;
-    seller?: UserData;
-    review?: { id: number; rating: number } | null;
-    reports?: { id: number; status: string }[];
+    confirmed_at: string | null;
+    completed_at: string | null;
+    cancelled_at: string | null;
+    cancelled_by: number | null;
+    cancel_reason: string | null;
+    listing: { id: number; title: string; images: { id: number; path: string }[]; category: { name: string } };
+    seller?: Person;
+    buyer?: Person;
+    review?: { id: number; rating: number; product_rating: number | null } | null;
 }
 
 interface Props {
     buyingOrders: Order[];
     sellingOrders: Order[];
-    transactionReasons: Record<string, string>;
 }
 
-export default function Index({
-    buyingOrders,
-    sellingOrders,
-    transactionReasons,
-}: Props) {
-    const [reporting, setReporting] = useState<Order | null>(null);
-    const formatPrice = (price: string | number) => {
-        return new Intl.NumberFormat('en-PH', {
-            style: 'currency',
-            currency: 'PHP',
-        }).format(Number(price));
-    };
+type DialogState =
+    | { kind: 'cancel'; order: Order; selling: boolean }
+    | { kind: 'complete'; order: Order; selling: boolean }
+    | null;
 
-    const formatDate = (date: string) => {
-        return new Date(date).toLocaleDateString('en-PH', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-        });
-    };
+function Steps({ order }: { order: Order }) {
+    const cancelled = order.status === 'cancelled';
 
-    const getStatusStyles = (status: Order['status']) => {
-        switch (status) {
-            case 'pending':
-                return {
-                    label: 'Pending',
-                    className:
-                        'bg-amber-50 text-amber-700 border-amber-200',
-                    icon: Clock3,
-                };
+    const steps = [
+        { label: 'Placed', at: order.created_at, done: true },
+        { label: 'Confirmed', at: order.confirmed_at, done: Boolean(order.confirmed_at) },
+        cancelled
+            ? { label: 'Cancelled', at: order.cancelled_at, done: true, bad: true }
+            : { label: 'Completed', at: order.completed_at, done: Boolean(order.completed_at) },
+    ];
 
-            case 'confirmed':
-                return {
-                    label: 'Confirmed',
-                    className:
-                        'bg-blue-50 text-blue-700 border-blue-200',
-                    icon: Check,
-                };
-
-            case 'completed':
-                return {
-                    label: 'Completed',
-                    className:
-                        'bg-emerald-50 text-emerald-700 border-emerald-200',
-                    icon: CheckCircle2,
-                };
-
-            case 'cancelled':
-                return {
-                    label: 'Cancelled',
-                    className:
-                        'bg-red-50 text-red-700 border-red-200',
-                    icon: X,
-                };
-        }
-    };
-
-    const cancelOrder = (orderId: number) => {
-        if (
-            !window.confirm(
-                'Are you sure you want to cancel this order?',
-            )
-        ) {
-            return;
-        }
-
-        router.post(`/orders/${orderId}/cancel`);
-    };
-
-    const confirmOrder = (orderId: number) => {
-        if (
-            !window.confirm(
-                'Are you sure you want to confirm this order?',
-            )
-        ) {
-            return;
-        }
-
-        router.post(`/orders/${orderId}/confirm`);
-    };
-
-    const completeOrder = (orderId: number) => {
-        if (
-            !window.confirm(
-                'Mark this order as completed?',
-            )
-        ) {
-            return;
-        }
-
-        router.post(`/orders/${orderId}/complete`);
-    };
-
-    const [reviewing, setReviewing] = useState<Order | null>(null);
-
-    const messageUser = (orderId: number) => {
-        router.post(`/orders/${orderId}/message`);
-    };
-
-    const OrderCard = ({
-        order,
-        selling,
-    }: {
-        order: Order;
-        selling: boolean;
-    }) => {
-        const status = getStatusStyles(order.status);
-        const StatusIcon = status.icon;
-
-        const otherUser = selling
-            ? order.buyer
-            : order.seller;
-
-        const image = order.listing.images?.[0];
-
-        return (
-            <div className="rounded-2xl border border-[#E1E9E4] bg-white p-5 shadow-sm transition hover:shadow-md">
-                <div className="flex flex-col gap-5 sm:flex-row">
-                    <div className="h-28 w-full shrink-0 overflow-hidden rounded-xl bg-[#F1F5F2] sm:h-28 sm:w-28">
-                        {image ? (
-                            <img
-                                src={`/storage/${image.path}`}
-                                alt={order.listing.title}
-                                className="h-full w-full object-cover"
-                            />
+    return (
+        <ol className="flex items-start" aria-label="Order progress">
+            {steps.map((step, i) => (
+                <li key={step.label} className="relative flex flex-1 flex-col items-center text-center">
+                    {i > 0 && (
+                        <span
+                            aria-hidden="true"
+                            className={`absolute right-1/2 top-[11px] h-0.5 w-full ${
+                                step.done ? ('bad' in step && step.bad ? 'bg-red-300' : 'bg-pine-600') : 'bg-mist-200'
+                            }`}
+                        />
+                    )}
+                    <span
+                        className={`relative z-10 flex h-6 w-6 items-center justify-center rounded-full text-white ${
+                            step.done ? ('bad' in step && step.bad ? 'bg-red-500' : 'bg-pine-700') : 'bg-mist-200'
+                        }`}
+                    >
+                        {step.done ? (
+                            'bad' in step && step.bad ? <X size={13} strokeWidth={3} /> : <Check size={13} strokeWidth={3} />
                         ) : (
-                            <div className="flex h-full w-full items-center justify-center text-slate-300">
-                                <Package size={30} />
-                            </div>
+                            <CircleDot size={12} className="text-white" />
                         )}
-                    </div>
+                    </span>
+                    <span className={`mt-1.5 text-[11px] font-bold ${step.done ? 'text-ink' : 'text-ink-3'}`}>
+                        {step.label}
+                    </span>
+                    <span className="text-[10px] text-ink-3">{step.at ? timeAgo(step.at) : '—'}</span>
+                </li>
+            ))}
+        </ol>
+    );
+}
 
-                    <div className="min-w-0 flex-1">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="min-w-0">
-                                <h3 className="truncate text-base font-bold text-slate-900">
-                                    {order.listing.title}
-                                </h3>
+export default function Index({ buyingOrders, sellingOrders }: Props) {
+    const [tab, setTab] = useState<'buying' | 'selling'>(
+        sellingOrders.some((o) => o.status === 'pending') ? 'selling' : 'buying',
+    );
+    const [dialog, setDialog] = useState<DialogState>(null);
+    const [reviewing, setReviewing] = useState<Order | null>(null);
+    const [busy, setBusy] = useState(false);
 
-                                <p className="mt-1 text-xs text-slate-500">
-                                    Order #{order.id}
-                                </p>
-                            </div>
+    // Order status changes from the other person show up on their own.
+    useLiveReload(['buyingOrders', 'sellingOrders'], 8000);
 
-                            <span
-                                className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${status.className}`}
-                            >
-                                <StatusIcon size={13} />
-                                {status.label}
-                            </span>
-                        </div>
+    const orders = tab === 'buying' ? buyingOrders : sellingOrders;
+    const selling = tab === 'selling';
+    const pendingToConfirm = sellingOrders.filter((o) => o.status === 'pending').length;
 
-                        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-500">
-                            <span className="font-medium text-slate-700">
-                                {formatPrice(order.price)}
-                                {order.quantity > 1 ? ' each' : ''}
-                            </span>
-
-                            <span>
-                                Quantity: {order.quantity}
-                            </span>
-
-                            <span className="font-bold text-[#176B4D]">
-                                Total {formatPrice(Number(order.price) * order.quantity)}
-                            </span>
-
-                            <span>
-                                {formatDate(order.created_at)}
-                            </span>
-                        </div>
-
-                        {otherUser && (
-                            <div className="mt-4 flex items-center gap-2">
-                                <CircleUserRound
-                                    size={16}
-                                    className="text-slate-400"
-                                />
-
-                                <span className="text-xs text-slate-500">
-                                    {selling
-                                        ? 'Buyer:'
-                                        : 'Seller:'}
-                                </span>
-
-                                <span className="text-xs font-semibold text-slate-700">
-                                    {otherUser.name}
-                                </span>
-                            </div>
-                        )}
-
-                        <div className="mt-4 flex flex-wrap gap-2">
-                            <a
-                                href={`/listings/${order.listing.id}`}
-                                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-                            >
-                                View Listing
-                            </a>
-
-                            <button
-                                type="button"
-                                onClick={() =>
-                                    messageUser(order.id)
-                                }
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-[#176B4D] px-3 py-2 text-xs font-semibold text-[#176B4D] transition hover:bg-[#EAF4EF]"
-                            >
-                                <MessageCircle size={14} />
-                                {selling
-                                    ? 'Message Buyer'
-                                    : 'Message Seller'}
-                            </button>
-
-                            {selling &&
-                                order.status === 'pending' && (
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            confirmOrder(
-                                                order.id,
-                                            )
-                                        }
-                                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#176B4D] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#12583F]"
-                                    >
-                                        <Check size={14} />
-                                        Confirm
-                                    </button>
-                                )}
-
-                            {(order.status === 'pending' ||
-                                order.status ===
-                                    'confirmed') && (
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        cancelOrder(order.id)
-                                    }
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-                                >
-                                    <X size={14} />
-                                    Cancel
-                                </button>
-                            )}
-
-                            {!selling &&
-                                order.status ===
-                                    'confirmed' && (
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            completeOrder(
-                                                order.id,
-                                            )
-                                        }
-                                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#176B4D] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#12583F]"
-                                    >
-                                        <CheckCircle2
-                                            size={14}
-                                        />
-                                        Mark Completed
-                                    </button>
-                                )}
-
-                            {!selling &&
-                                order.status === 'completed' &&
-                                (order.review ? (
-                                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-                                        <Star
-                                            size={14}
-                                            className="fill-amber-400 text-amber-400"
-                                        />
-                                        You rated {order.review.rating}/5
-                                    </span>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => setReviewing(order)}
-                                        className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-amber-600"
-                                    >
-                                        <Star size={14} />
-                                        Leave a Review
-                                    </button>
-                                ))}
-
-                            {(() => {
-                                const filed = order.reports?.[0];
-
-                                return filed ? (
-                                    <Link
-                                        href={`/reports/${filed.id}`}
-                                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#d4623a]/40 bg-[#fcebe3] px-3 py-2 text-xs font-semibold text-[#8f3a1b] transition hover:bg-[#f9dccf]"
-                                    >
-                                        <FileText size={14} />
-                                        View report ({filed.status})
-                                    </Link>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => setReporting(order)}
-                                        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-[#566860] transition hover:bg-red-50 hover:text-red-700"
-                                    >
-                                        <Flag size={14} />
-                                        Report transaction
-                                    </button>
-                                );
-                            })()}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
-    };
+    const act = (path: string, data: Record<string, string> = {}) =>
+        router.post(path, data, {
+            preserveScroll: true,
+            onStart: () => setBusy(true),
+            onFinish: () => {
+                setBusy(false);
+                setDialog(null);
+            },
+        });
 
     return (
         <AppLayout>
-            <Head title="My Orders" />
+            <Head title="My orders" />
 
-            <div className="min-h-screen bg-[#F7FAF7] px-4 py-6 sm:px-6 lg:px-8">
-                <div className="mx-auto max-w-6xl">
-                    <div className="mb-8">
-                        <div className="flex items-center gap-3">
-                            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#EAF4EF] text-[#176B4D]">
-                                <ShoppingBag size={22} />
-                            </div>
+            <Page>
+                <PageHeader
+                    icon={ShoppingBag}
+                    title="My orders"
+                    subtitle="Track what you are buying and selling"
+                />
 
-                            <div>
-                                <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                                    My Orders
-                                </h1>
-
-                                <p className="text-sm text-slate-500">
-                                    Manage your purchases and sales
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-8">
-                        <section>
-                            <div className="mb-4 flex items-center gap-2">
-                                <ShoppingBag
-                                    size={18}
-                                    className="text-[#176B4D]"
-                                />
-
-                                <h2 className="text-lg font-bold text-slate-900">
-                                    Buying
-                                </h2>
-
-                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-                                    {buyingOrders.length}
-                                </span>
-                            </div>
-
-                            {buyingOrders.length === 0 ? (
-                                <div className="rounded-2xl border border-[#E1E9E4] bg-white px-6 py-12 text-center shadow-sm">
-                                    <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#EAF4EF] text-[#176B4D]">
-                                        <ShoppingBag size={26} />
-                                    </div>
-
-                                    <h3 className="mt-4 text-base font-bold text-slate-800">
-                                        No purchases yet
-                                    </h3>
-
-                                    <p className="mx-auto mt-2 max-w-sm text-sm text-slate-500">
-                                        When you place an order for a
-                                        listing, it will appear here.
-                                    </p>
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    {buyingOrders.map(
-                                        (order) => (
-                                            <OrderCard
-                                                key={order.id}
-                                                order={order}
-                                                selling={false}
-                                            />
-                                        ),
-                                    )}
-                                </div>
+                <div className="mb-6 inline-flex gap-1.5 rounded-2xl bg-white p-1.5 ring-1 ring-mist-200" role="tablist">
+                    {(
+                        [
+                            ['buying', 'Buying', buyingOrders.length, ShoppingBag],
+                            ['selling', 'Selling', sellingOrders.length, Store],
+                        ] as const
+                    ).map(([value, label, count, Icon]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            role="tab"
+                            aria-selected={tab === value}
+                            onClick={() => setTab(value)}
+                            className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold transition ${
+                                tab === value ? 'bg-pine-800 text-white' : 'text-ink-2 hover:bg-mist-100'
+                            }`}
+                        >
+                            <Icon size={16} />
+                            {label}
+                            <span
+                                className={`rounded-full px-2 py-0.5 text-[11px] ${
+                                    tab === value ? 'bg-white/20' : 'bg-mist-100 text-ink-2'
+                                }`}
+                            >
+                                {count}
+                            </span>
+                            {value === 'selling' && pendingToConfirm > 0 && (
+                                <span className="h-2.5 w-2.5 rounded-full bg-sun-400 ring-2 ring-white" title="Orders to confirm" />
                             )}
-                        </section>
-
-                        <section>
-                            <div className="mb-4 flex items-center gap-2">
-                                <Store
-                                    size={18}
-                                    className="text-[#176B4D]"
-                                />
-
-                                <h2 className="text-lg font-bold text-slate-900">
-                                    Selling
-                                </h2>
-
-                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-                                    {sellingOrders.length}
-                                </span>
-                            </div>
-
-                            {sellingOrders.length === 0 ? (
-                                <div className="rounded-2xl border border-[#E1E9E4] bg-white px-6 py-12 text-center shadow-sm">
-                                    <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#EAF4EF] text-[#176B4D]">
-                                        <Store size={26} />
-                                    </div>
-
-                                    <h3 className="mt-4 text-base font-bold text-slate-800">
-                                        No sales yet
-                                    </h3>
-
-                                    <p className="mx-auto mt-2 max-w-sm text-sm text-slate-500">
-                                        Orders from buyers for your
-                                        listings will appear here.
-                                    </p>
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    {sellingOrders.map(
-                                        (order) => (
-                                            <OrderCard
-                                                key={order.id}
-                                                order={order}
-                                                selling={true}
-                                            />
-                                        ),
-                                    )}
-                                </div>
-                            )}
-                        </section>
-                    </div>
+                        </button>
+                    ))}
                 </div>
-            </div>
 
-            {reporting && (
-                <ReportModal
-                    action={`/orders/${reporting.id}/report`}
-                    title={`Report order #${reporting.id}`}
-                    reasons={transactionReasons}
-                    onClose={() => setReporting(null)}
-                    note="We compile this order, your conversation and the details you give into a case file that can be handed to the school's authorities."
+                {orders.length === 0 ? (
+                    <EmptyState
+                        icon={selling ? Store : ShoppingBag}
+                        title={selling ? 'No sales yet' : 'No purchases yet'}
+                        text={
+                            selling
+                                ? 'When someone orders one of your listings it will appear here for you to confirm.'
+                                : 'Find something you like and tap “Order now”. The seller will confirm it.'
+                        }
+                        action={
+                            selling
+                                ? { label: 'Create a listing', href: '/listings/create' }
+                                : { label: 'Browse the marketplace', href: '/marketplace' }
+                        }
+                    />
+                ) : (
+                    <ul className="space-y-4">
+                        {orders.map((order) => {
+                            const other = selling ? order.buyer : order.seller;
+                            const open = order.status === 'pending' || order.status === 'confirmed';
+
+                            return (
+                                <li key={order.id} className="ui-card overflow-hidden">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-mist-100 bg-mist-50 px-5 py-3">
+                                        <div className="flex items-center gap-3 text-[13px] text-ink-2">
+                                            <span className="font-extrabold text-ink">{order.reference}</span>
+                                            <span>Placed {formatDateTime(order.created_at)}</span>
+                                        </div>
+                                        <StatusBadge status={order.status} />
+                                    </div>
+
+                                    <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+                                        <div className="flex gap-4">
+                                            <Link
+                                                href={`/listings/${order.listing.id}`}
+                                                className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-mist-100"
+                                            >
+                                                {order.listing.images[0] ? (
+                                                    <img
+                                                        src={`/storage/${order.listing.images[0].path}`}
+                                                        alt=""
+                                                        className="h-full w-full object-cover"
+                                                    />
+                                                ) : (
+                                                    <span className="flex h-full items-center justify-center text-mist-300">
+                                                        <Package size={30} />
+                                                    </span>
+                                                )}
+                                            </Link>
+
+                                            <div className="min-w-0 flex-1">
+                                                <Link
+                                                    href={`/listings/${order.listing.id}`}
+                                                    className="block truncate font-display text-lg font-extrabold text-pine-950 hover:text-pine-700"
+                                                >
+                                                    {order.listing.title}
+                                                </Link>
+                                                <p className="mt-0.5 text-sm text-ink-2">
+                                                    {order.quantity} × {formatPrice(order.price)}
+                                                </p>
+                                                <p className="font-display text-xl font-extrabold text-pine-900">
+                                                    {formatPrice(order.total)}
+                                                </p>
+                                                {other && (
+                                                    <Link
+                                                        href={`/users/${other.id}`}
+                                                        className="mt-2 inline-flex items-center gap-2 text-[13px] font-semibold text-ink-2 hover:text-pine-700"
+                                                    >
+                                                        <Avatar name={other.name} url={other.avatar_url} size={24} />
+                                                        {selling ? 'Buyer' : 'Seller'}: {other.name}
+                                                    </Link>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-2xl bg-mist-50 p-4 ring-1 ring-mist-200">
+                                            <Steps order={order} />
+                                            {order.status === 'cancelled' && order.cancel_reason && (
+                                                <p className="mt-3 rounded-lg bg-white px-3 py-2 text-xs text-ink-2 ring-1 ring-mist-200">
+                                                    <strong className="text-ink">Reason:</strong> {order.cancel_reason}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2 border-t border-mist-100 px-5 py-3.5">
+                                        {selling && order.status === 'pending' && (
+                                            <button
+                                                type="button"
+                                                disabled={busy}
+                                                onClick={() => act(`/orders/${order.id}/confirm`)}
+                                                className="ui-btn ui-btn-primary ui-btn-sm"
+                                            >
+                                                <Check size={15} strokeWidth={3} /> Confirm order
+                                            </button>
+                                        )}
+
+                                        {order.status === 'confirmed' && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setDialog({ kind: 'complete', order, selling })}
+                                                className="ui-btn ui-btn-primary ui-btn-sm"
+                                            >
+                                                <Check size={15} strokeWidth={3} />
+                                                {selling ? 'Mark as handed over' : 'Mark as received'}
+                                            </button>
+                                        )}
+
+                                        {!selling && order.status === 'completed' &&
+                                            (order.review ? (
+                                                <span className="ui-chip bg-sun-300/45 text-sun-800">
+                                                    <Star size={13} className="fill-sun-500 text-sun-500" />
+                                                    You rated {order.review.product_rating ?? order.review.rating}/5
+                                                </span>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setReviewing(order)}
+                                                    className="ui-btn ui-btn-gold ui-btn-sm"
+                                                >
+                                                    <Star size={15} /> Leave a review
+                                                </button>
+                                            ))}
+
+                                        {open && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setDialog({ kind: 'cancel', order, selling })}
+                                                className="ui-btn ui-btn-danger-outline ui-btn-sm"
+                                            >
+                                                {selling && order.status === 'pending' ? 'Decline' : 'Cancel order'}
+                                            </button>
+                                        )}
+
+                                        <div className="ml-auto flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => router.post(`/orders/${order.id}/message`)}
+                                                className="ui-btn ui-btn-outline ui-btn-sm"
+                                            >
+                                                <MessageCircle size={15} /> Message
+                                            </button>
+                                            <Link
+                                                href={`/orders/${order.id}/report`}
+                                                className="ui-btn ui-btn-ghost ui-btn-sm"
+                                                title="Compile this transaction and report a problem"
+                                            >
+                                                <Flag size={15} /> Report transaction
+                                            </Link>
+                                        </div>
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+
+                <p className="mt-6 flex items-start gap-2 text-xs leading-relaxed text-ink-3">
+                    <ReceiptText size={14} className="mt-0.5 shrink-0" />
+                    There is no online payment. Pay and hand over in person on campus. If something goes wrong, use
+                    “Report transaction” to compile the chat and details for the marketplace admins.
+                </p>
+            </Page>
+
+            {dialog?.kind === 'cancel' && (
+                <ConfirmDialog
+                    title={dialog.selling && dialog.order.status === 'pending' ? 'Decline this order?' : 'Cancel this order?'}
+                    message="The item becomes available again for other buyers. The other person will see that the order was cancelled."
+                    confirmLabel={dialog.selling && dialog.order.status === 'pending' ? 'Decline order' : 'Cancel order'}
+                    askReason="Why are you cancelling?"
+                    processing={busy}
+                    onConfirm={(reason) => act(`/orders/${dialog.order.id}/cancel`, { reason })}
+                    onClose={() => setDialog(null)}
+                />
+            )}
+
+            {dialog?.kind === 'complete' && (
+                <ConfirmDialog
+                    tone="primary"
+                    title="Complete this order?"
+                    message={
+                        dialog.selling
+                            ? 'Only continue once the buyer has the item (or the service is done) and you have been paid. This cannot be undone.'
+                            : 'Only continue once you have received the item (or the service is done). This cannot be undone and lets you review the seller.'
+                    }
+                    confirmLabel="Yes, it is done"
+                    processing={busy}
+                    onConfirm={() => act(`/orders/${dialog.order.id}/complete`)}
+                    onClose={() => setDialog(null)}
                 />
             )}
 

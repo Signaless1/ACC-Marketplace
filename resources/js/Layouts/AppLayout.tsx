@@ -1,104 +1,86 @@
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import Sidebar from '../components/dashboard/Sidebar';
+import { router } from '@inertiajs/react';
+import { ReactNode, useCallback, useEffect, useState } from 'react';
 import Header from '../components/dashboard/Header';
-import MessagePopup from '../components/ui/MessagePopup';
+import MessagePopup from '../components/dashboard/MessagePopup';
+import Sidebar from '../components/dashboard/Sidebar';
+import SuspendedNotice from '../components/ui/SuspendedNotice';
 import Toast from '../components/ui/Toast';
-import { useMessagePolling } from '../hooks/useMessagePolling';
-import { LayoutContext } from './LayoutContext';
+import { LiveProvider } from '../lib/live';
+
+const STORAGE_KEY = 'acc.sidebar';
 
 interface AppLayoutProps {
     children: ReactNode;
 }
 
-const STORAGE_KEY = 'acc.sidebar.collapsed';
-const MOBILE_QUERY = '(max-width: 900px)';
-
-const isMobile = () =>
-    typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches;
-
-function readCollapsed(): boolean {
-    try {
-        return window.localStorage.getItem(STORAGE_KEY) === '1';
-    } catch {
-        return false;
-    }
-}
-
 export default function AppLayout({ children }: AppLayoutProps) {
-    // Desktop: remembered between visits. Mobile: always starts closed.
-    const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
-    const [mobileOpen, setMobileOpen] = useState(false);
-    const { unread, incoming, dismissIncoming } = useMessagePolling();
-
-    const toggleSidebar = useCallback(() => {
-        if (isMobile()) {
-            setMobileOpen((open) => !open);
-
-            return;
+    // The collapsed state is remembered between visits.
+    const [collapsed, setCollapsed] = useState<boolean>(() => {
+        try {
+            return window.localStorage.getItem(STORAGE_KEY) === 'collapsed';
+        } catch {
+            return false;
         }
+    });
+    const [mobileOpen, setMobileOpen] = useState(false);
 
+    const toggleCollapse = useCallback(() => {
         setCollapsed((current) => {
             const next = !current;
 
             try {
-                window.localStorage.setItem(STORAGE_KEY, next ? '1' : '0');
+                window.localStorage.setItem(STORAGE_KEY, next ? 'collapsed' : 'expanded');
             } catch {
-                // Private mode: the toggle still works for this visit.
+                // Private mode: still works, just not remembered.
             }
 
             return next;
         });
     }, []);
 
-    const closeSidebarOnMobile = useCallback(() => setMobileOpen(false), []);
-
+    // Close the mobile drawer after navigating, and on Escape.
     useEffect(() => {
+        const stop = router.on('navigate', () => setMobileOpen(false));
         const onKey = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                setMobileOpen(false);
-            }
+            if (event.key === 'Escape') setMobileOpen(false);
         };
 
         window.addEventListener('keydown', onKey);
 
-        return () => window.removeEventListener('keydown', onKey);
+        return () => {
+            stop();
+            window.removeEventListener('keydown', onKey);
+        };
     }, []);
 
-    const sidebarVisible = isMobile() ? mobileOpen : !collapsed;
-
-    const value = useMemo(
-        () => ({ sidebarVisible, toggleSidebar, closeSidebarOnMobile, unread }),
-        [sidebarVisible, toggleSidebar, closeSidebarOnMobile, unread],
-    );
-
     return (
-        <LayoutContext.Provider value={value}>
-            <div className="dashboard-page">
+        <LiveProvider>
+            <div className="min-h-screen bg-mist-50 font-body text-ink print:bg-white">
                 <Toast />
-                <MessagePopup message={incoming} onDismiss={dismissIncoming} />
+                <SuspendedNotice />
+                <MessagePopup />
+
+                <Sidebar
+                    collapsed={collapsed}
+                    onToggleCollapse={toggleCollapse}
+                    mobileOpen={mobileOpen}
+                    onCloseMobile={() => setMobileOpen(false)}
+                />
 
                 <div
-                    className={`dashboard-shell ${collapsed ? 'sidebar-collapsed' : ''} ${
-                        mobileOpen ? 'sidebar-open-mobile' : ''
+                    className={`min-h-screen transition-[padding] duration-300 ease-out print:pl-0 ${
+                        collapsed ? 'lg:pl-[84px]' : 'lg:pl-[272px]'
                     }`}
                 >
-                    <Sidebar />
-
-                    <button
-                        type="button"
-                        className="sidebar-backdrop"
-                        aria-label="Close menu"
-                        tabIndex={-1}
-                        onClick={closeSidebarOnMobile}
+                    <Header
+                        collapsed={collapsed}
+                        onToggleCollapse={toggleCollapse}
+                        onOpenMobile={() => setMobileOpen(true)}
                     />
 
-                    <div className="dashboard-main">
-                        <Header />
-
-                        <main className="dashboard-content">{children}</main>
-                    </div>
+                    <main className="min-w-0">{children}</main>
                 </div>
             </div>
-        </LayoutContext.Provider>
+        </LiveProvider>
     );
 }

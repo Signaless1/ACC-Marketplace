@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\RegisterRequest;
+use App\Support\PhilippinePhone;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -18,19 +19,37 @@ class SettingsController extends Controller
 
     public function updateProfile(Request $request): RedirectResponse
     {
+        $user = $request->user();
+
+        if ($request->has('phone')) {
+            $request->merge([
+                'phone' => PhilippinePhone::normalize($request->input('phone'))
+                    ?? $request->input('phone'),
+            ]);
+        }
+
         $validated = $request->validate([
             'name' => RegisterRequest::nameRules(),
+            // Accounts that predate phone numbers can add one here. Once an
+            // account has a number it cannot be blanked out.
+            'phone' => [
+                'sometimes',
+                $user->phone ? 'required' : 'nullable',
+                ...RegisterRequest::phoneRules($user->id),
+            ],
             'bio' => ['nullable', 'string', 'max:500'],
             'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'remove_avatar' => ['nullable', 'boolean'],
-        ]);
-
-        $user = $request->user();
+        ], RegisterRequest::phoneMessages());
 
         $data = [
             'name' => $validated['name'],
             'bio' => $validated['bio'] ?? null,
         ];
+
+        if (array_key_exists('phone', $validated) && $validated['phone'] !== null) {
+            $data['phone'] = $validated['phone'];
+        }
 
         if ($request->hasFile('avatar')) {
             if ($user->avatar_path) {

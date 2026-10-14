@@ -1,25 +1,37 @@
 import { Head, Link, router } from '@inertiajs/react';
-import { FileText, Gavel } from 'lucide-react';
+import { ChevronDown, FileText, Flag, Gavel, Package, ReceiptText, Send, UserX } from 'lucide-react';
 import { useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
 import AdminNav from '../../components/ui/AdminNav';
+import { Page } from '../../components/ui/PageHeader';
 import Pagination from '../../components/ui/Pagination';
-import { formatDate, Paginated } from '../../types/shared';
+import StatusBadge from '../../components/ui/StatusBadge';
+import { formatDateTime, formatPrice, Paginated, timeAgo } from '../../types/shared';
 
 interface AdminReport {
     id: number;
     reason: string;
     description: string | null;
-    status: 'pending' | 'reviewing' | 'resolved' | 'dismissed';
+    status: 'pending' | 'reviewing' | 'escalated' | 'resolved' | 'dismissed';
     admin_note: string | null;
     created_at: string;
-    reporter: { id: number; name: string };
+    escalated_to: string | null;
+    escalated_at: string | null;
+    reporter: { id: number; name: string } | null;
     listing: { id: number; title: string; hidden_at: string | null } | null;
     reported_user: { id: number; name: string; suspended_at: string | null } | null;
     reviewer: { name: string } | null;
-    order: { id: number; status: string; quantity: number; price: string } | null;
-    escalated_to: string | null;
-    escalated_at: string | null;
+    order: {
+        id: number;
+        reference: string;
+        status: string;
+        quantity: number;
+        price: string;
+        total: string;
+        created_at: string;
+        buyer: { name: string };
+        seller: { name: string };
+    } | null;
 }
 
 interface Props {
@@ -28,34 +40,45 @@ interface Props {
     counts: Record<string, number>;
     reasons: Record<string, string>;
     removalReasons: Record<string, string>;
-    authorities: string[];
 }
 
-const statuses = ['pending', 'reviewing', 'resolved', 'dismissed', 'all'];
+const filters = ['pending', 'reviewing', 'escalated', 'resolved', 'dismissed', 'all'];
+
+function kindOf(report: AdminReport) {
+    return report.order ? 'Transaction' : report.listing ? 'Listing' : 'User';
+}
 
 function ReportCard({
     report,
     reasons,
     removalReasons,
-    authorities,
+    defaultOpen,
 }: {
     report: AdminReport;
     reasons: Record<string, string>;
     removalReasons: Record<string, string>;
-    authorities: string[];
+    defaultOpen: boolean;
 }) {
-    const [removalReason, setRemovalReason] = useState(
-        report.reason in removalReasons ? report.reason : 'other',
-    );
-    const [authority, setAuthority] = useState(authorities[0] ?? '');
-    const [referring, setReferring] = useState(false);
+    const [open, setOpen] = useState(defaultOpen);
     const [note, setNote] = useState(report.admin_note ?? '');
-    const [hideListing, setHideListing] = useState(false);
+    const [removeListing, setRemoveListing] = useState(false);
+    const [removalReason, setRemovalReason] = useState('');
+    const [removalNote, setRemovalNote] = useState('');
     const [suspendUser, setSuspendUser] = useState(false);
+    const [suspensionReason, setSuspensionReason] = useState('');
+    const [escalating, setEscalating] = useState(report.status === 'escalated');
+    const [escalatedTo, setEscalatedTo] = useState(report.escalated_to ?? '');
+    const [errors, setErrors] = useState<Record<string, string>>({});
     const [processing, setProcessing] = useState(false);
 
+    const isOpen = ['pending', 'reviewing', 'escalated'].includes(report.status);
+    const canRemove = Boolean(report.listing && !report.listing.hidden_at);
+    const canSuspend = Boolean(report.reported_user && !report.reported_user.suspended_at);
+    const Kind = report.order ? ReceiptText : report.listing ? Package : UserX;
+
     const update = (status: AdminReport['status']) => {
-        if (suspendUser && !window.confirm('Suspend the reported user?')) {
+        if (status === 'escalated' && !escalating) {
+            setEscalating(true);
             return;
         }
 
@@ -64,292 +87,328 @@ function ReportCard({
             {
                 status,
                 admin_note: note,
-                hide_listing: hideListing,
-                removal_reason: removalReason,
+                escalated_to: escalatedTo,
+                remove_listing: removeListing,
+                removal_reason: removeListing ? removalReason : '',
+                removal_note: removeListing ? removalNote : '',
                 suspend_user: suspendUser,
+                suspension_reason: suspendUser ? suspensionReason : '',
             },
             {
                 preserveScroll: true,
-                onStart: () => setProcessing(true),
+                onStart: () => {
+                    setProcessing(true);
+                    setErrors({});
+                },
                 onFinish: () => setProcessing(false),
+                onError: (e) => setErrors(e),
+                onSuccess: () => {
+                    setRemoveListing(false);
+                    setSuspendUser(false);
+                },
             },
         );
     };
 
-    const open = report.status === 'pending' || report.status === 'reviewing';
-
     return (
-        <article className="rounded-2xl border border-[#E1E9E4] bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                    <p className="text-sm font-bold text-slate-900">
-                        {reasons[report.reason] ?? report.reason}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                        Reported by {report.reporter.name} ·{' '}
-                        {formatDate(report.created_at)}
-                    </p>
-                </div>
-                <span className="flex items-center gap-2">
-                    {report.order && (
-                        <span className="rounded-full bg-[#fcebe3] px-2.5 py-1 text-xs font-bold text-[#8f3a1b]">
-                            Transaction #{report.order.id}
+        <article className="ui-card overflow-hidden">
+            <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                className="flex w-full items-center gap-4 p-5 text-left transition hover:bg-mist-50"
+            >
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-mist-100 text-pine-700">
+                    <Kind size={21} />
+                </span>
+
+                <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-display text-base font-extrabold text-pine-950">
+                            {reasons[report.reason] ?? report.reason}
                         </span>
-                    )}
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-700">
-                    {report.status}
-                </span>
-                </span>
-            </div>
-
-            <div className="mt-3 space-y-1 text-sm">
-                {report.listing && (
-                    <p>
-                        <span className="text-slate-400">Listing: </span>
-                        <Link
-                            href={`/listings/${report.listing.id}`}
-                            className="font-medium text-[#176B4D] hover:underline"
-                        >
-                            {report.listing.title}
-                        </Link>
-                        {report.listing.hidden_at && (
-                            <span className="ml-2 text-xs text-red-600">(hidden)</span>
-                        )}
-                    </p>
-                )}
-                {report.reported_user && (
-                    <p>
-                        <span className="text-slate-400">User: </span>
-                        <Link
-                            href={`/users/${report.reported_user.id}`}
-                            className="font-medium text-[#176B4D] hover:underline"
-                        >
-                            {report.reported_user.name}
-                        </Link>
-                        {report.reported_user.suspended_at && (
-                            <span className="ml-2 text-xs text-red-600">(suspended)</span>
-                        )}
-                    </p>
-                )}
-                {!report.listing && !report.reported_user && (
-                    <p className="text-slate-400">
-                        The reported item no longer exists.
-                    </p>
-                )}
-            </div>
-
-            {report.description && (
-                <p className="mt-3 whitespace-pre-line rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
-                    {report.description}
-                </p>
-            )}
-
-            <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-                <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-slate-500">
-                        Admin note
+                        <span className="ui-chip bg-mist-100 text-pine-800">{kindOf(report)}</span>
                     </span>
-                    <textarea
-                        rows={2}
-                        value={note}
-                        onChange={(e) => setNote(e.target.value)}
-                        maxLength={1000}
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#176B4D]"
-                    />
-                </label>
+                    <span className="mt-0.5 block truncate text-xs text-ink-3">
+                        {report.listing?.title ?? report.reported_user?.name ?? 'Deleted item'} · reported by{' '}
+                        {report.reporter?.name ?? 'unknown'} · {timeAgo(report.created_at)}
+                    </span>
+                </span>
 
-                {open && (
-                    <div className="flex flex-wrap gap-4 text-sm text-slate-600">
-                        {report.listing && !report.listing.hidden_at && (
-                            <label className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    checked={hideListing}
-                                    onChange={(e) => setHideListing(e.target.checked)}
-                                />
-                                Hide listing
-                            </label>
+                <StatusBadge status={report.status} />
+                <ChevronDown size={18} className={`shrink-0 text-ink-3 transition ${open ? 'rotate-180' : ''}`} />
+            </button>
+
+            {open && (
+                <div className="space-y-5 border-t border-mist-100 p-5">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        {report.listing && (
+                            <div className="rounded-xl bg-mist-50 p-4 ring-1 ring-mist-200">
+                                <p className="text-[11px] font-bold uppercase tracking-wide text-ink-3">Listing</p>
+                                <Link href={`/listings/${report.listing.id}`} className="mt-1 block font-bold text-pine-700 hover:underline">
+                                    {report.listing.title}
+                                </Link>
+                                {report.listing.hidden_at && <StatusBadge status="removed" />}
+                            </div>
                         )}
-                        {report.listing && !report.listing.hidden_at && hideListing && (
-                            <label className="flex items-center gap-2">
-                                <span className="font-semibold">Reason:</span>
-                                <select
-                                    value={removalReason}
-                                    onChange={(e) => setRemovalReason(e.target.value)}
-                                    className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
-                                >
-                                    {Object.entries(removalReasons).map(([k, v]) => (
-                                        <option key={k} value={k}>{v}</option>
-                                    ))}
-                                </select>
-                            </label>
-                        )}
-                        {report.reported_user && !report.reported_user.suspended_at && (
-                            <label className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    checked={suspendUser}
-                                    onChange={(e) => setSuspendUser(e.target.checked)}
-                                />
-                                Suspend user
-                            </label>
+                        {report.reported_user && (
+                            <div className="rounded-xl bg-mist-50 p-4 ring-1 ring-mist-200">
+                                <p className="text-[11px] font-bold uppercase tracking-wide text-ink-3">Reported user</p>
+                                <Link href={`/users/${report.reported_user.id}`} className="mt-1 block font-bold text-pine-700 hover:underline">
+                                    {report.reported_user.name}
+                                </Link>
+                                {report.reported_user.suspended_at && <StatusBadge status="suspended" />}
+                            </div>
                         )}
                     </div>
-                )}
 
-                <div className="flex flex-wrap gap-2">
-                    {report.status === 'pending' && (
-                        <button
-                            type="button"
-                            disabled={processing}
-                            onClick={() => update('reviewing')}
-                            className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-                        >
-                            Mark reviewing
-                        </button>
+                    {report.order && (
+                        <div className="rounded-xl border-2 border-sun-400/50 bg-sun-300/15 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <p className="flex items-center gap-2 text-sm font-extrabold text-ink">
+                                        <ReceiptText size={16} className="text-sun-700" />
+                                        Transaction {report.order.reference}
+                                        <StatusBadge status={report.order.status} />
+                                    </p>
+                                    <p className="mt-1 text-[13px] text-ink-2">
+                                        {report.order.buyer.name} → {report.order.seller.name} · {report.order.quantity} ×{' '}
+                                        {formatPrice(report.order.price)} = <strong>{formatPrice(report.order.total)}</strong>
+                                    </p>
+                                    <p className="text-xs text-ink-3">Placed {formatDateTime(report.order.created_at)}</p>
+                                </div>
+                                <Link href={`/orders/${report.order.id}/report`} className="ui-btn ui-btn-primary ui-btn-sm">
+                                    <FileText size={15} /> Open compiled report
+                                </Link>
+                            </div>
+                        </div>
                     )}
-                    {open && (
-                        <>
-                            <button
-                                type="button"
-                                disabled={processing}
-                                onClick={() => update('resolved')}
-                                className="rounded-lg bg-[#176B4D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#12583F] disabled:opacity-50"
-                            >
-                                Resolve
-                            </button>
-                            <button
-                                type="button"
-                                disabled={processing}
-                                onClick={() => update('dismissed')}
-                                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                            >
-                                Dismiss
-                            </button>
-                        </>
+
+                    {report.description && (
+                        <div>
+                            <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-ink-3">What they said</p>
+                            <p className="whitespace-pre-line rounded-xl bg-mist-50 p-4 text-sm leading-relaxed text-ink-2 ring-1 ring-mist-200">
+                                {report.description}
+                            </p>
+                        </div>
                     )}
-                    {!open && (
-                        <button
-                            type="button"
-                            disabled={processing}
-                            onClick={() => update('reviewing')}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                        >
-                            Reopen
-                        </button>
+
+                    {report.escalated_to && (
+                        <p className="flex items-center gap-2 rounded-xl bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-900">
+                            <Send size={16} />
+                            Escalated to {report.escalated_to}
+                            {report.escalated_at && ` on ${formatDateTime(report.escalated_at)}`}
+                        </p>
                     )}
+
+                    {/* Decision panel */}
+                    <div className="space-y-4 rounded-2xl border border-mist-200 p-4 sm:p-5">
+                        <p className="flex items-center gap-2 font-display text-sm font-extrabold text-pine-950">
+                            <Gavel size={16} className="text-pine-700" /> Decision
+                        </p>
+
+                        <div>
+                            <label htmlFor={`note-${report.id}`} className="ui-label">Admin note</label>
+                            <textarea
+                                id={`note-${report.id}`}
+                                rows={2}
+                                maxLength={1000}
+                                value={note}
+                                onChange={(e) => setNote(e.target.value)}
+                                className="ui-input"
+                                placeholder="What did you find? This stays internal."
+                            />
+                        </div>
+
+                        {isOpen && (canRemove || canSuspend) && (
+                            <div className="space-y-3">
+                                <p className="text-xs text-ink-3">
+                                    Optional actions. Each one needs its own reason, and removing a listing does not
+                                    suspend the seller.
+                                </p>
+
+                                {canRemove && (
+                                    <div className="rounded-xl bg-mist-50 p-3.5 ring-1 ring-mist-200">
+                                        <label className="flex cursor-pointer items-center gap-3 text-sm font-bold text-ink">
+                                            <input
+                                                type="checkbox"
+                                                checked={removeListing}
+                                                onChange={(e) => setRemoveListing(e.target.checked)}
+                                                className="h-4 w-4 accent-pine-700"
+                                            />
+                                            Remove the listing
+                                        </label>
+                                        {removeListing && (
+                                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                                <div>
+                                                    <select
+                                                        value={removalReason}
+                                                        onChange={(e) => setRemovalReason(e.target.value)}
+                                                        aria-label="Removal reason"
+                                                        className={`ui-input ${errors.removal_reason ? 'ui-input-error' : ''}`}
+                                                    >
+                                                        <option value="">Reason for removal…</option>
+                                                        {Object.entries(removalReasons).map(([k, label]) => (
+                                                            <option key={k} value={k}>{label}</option>
+                                                        ))}
+                                                    </select>
+                                                    {errors.removal_reason && <p className="ui-error">{errors.removal_reason}</p>}
+                                                </div>
+                                                <input
+                                                    value={removalNote}
+                                                    onChange={(e) => setRemovalNote(e.target.value)}
+                                                    maxLength={500}
+                                                    placeholder="Note to the seller (optional)"
+                                                    aria-label="Note to the seller"
+                                                    className="ui-input"
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {canSuspend && (
+                                    <div className="rounded-xl bg-mist-50 p-3.5 ring-1 ring-mist-200">
+                                        <label className="flex cursor-pointer items-center gap-3 text-sm font-bold text-ink">
+                                            <input
+                                                type="checkbox"
+                                                checked={suspendUser}
+                                                onChange={(e) => setSuspendUser(e.target.checked)}
+                                                className="h-4 w-4 accent-red-600"
+                                            />
+                                            Also suspend {report.reported_user?.name}
+                                        </label>
+                                        {suspendUser && (
+                                            <div className="mt-3">
+                                                <input
+                                                    value={suspensionReason}
+                                                    onChange={(e) => setSuspensionReason(e.target.value)}
+                                                    maxLength={300}
+                                                    placeholder="Reason shown to the user"
+                                                    aria-label="Suspension reason"
+                                                    className={`ui-input ${errors.suspension_reason ? 'ui-input-error' : ''}`}
+                                                />
+                                                {errors.suspension_reason && <p className="ui-error">{errors.suspension_reason}</p>}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {escalating && (
+                            <div>
+                                <label htmlFor={`esc-${report.id}`} className="ui-label">
+                                    Escalate to (office or person)
+                                </label>
+                                <input
+                                    id={`esc-${report.id}`}
+                                    value={escalatedTo}
+                                    onChange={(e) => setEscalatedTo(e.target.value)}
+                                    maxLength={150}
+                                    placeholder="e.g. Student Affairs Office, Guidance Counselor"
+                                    className={`ui-input ${errors.escalated_to ? 'ui-input-error' : ''}`}
+                                />
+                                {errors.escalated_to && <p className="ui-error">{errors.escalated_to}</p>}
+                                <p className="ui-hint">
+                                    Print the compiled transaction report and hand it over, then record who received it.
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                            {report.status === 'pending' && (
+                                <button type="button" disabled={processing} onClick={() => update('reviewing')} className="ui-btn ui-btn-outline ui-btn-sm">
+                                    Mark reviewing
+                                </button>
+                            )}
+                            {isOpen && (
+                                <>
+                                    <button type="button" disabled={processing} onClick={() => update('resolved')} className="ui-btn ui-btn-primary ui-btn-sm">
+                                        Resolve
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={processing || (escalating && !escalatedTo.trim())}
+                                        onClick={() => update('escalated')}
+                                        className="ui-btn ui-btn-sm bg-violet-700 text-white hover:bg-violet-800"
+                                    >
+                                        <Send size={14} />
+                                        {escalating ? 'Save escalation' : 'Escalate…'}
+                                    </button>
+                                    <button type="button" disabled={processing} onClick={() => update('dismissed')} className="ui-btn ui-btn-outline ui-btn-sm">
+                                        Dismiss
+                                    </button>
+                                </>
+                            )}
+                            {!isOpen && (
+                                <button type="button" disabled={processing} onClick={() => update('reviewing')} className="ui-btn ui-btn-outline ui-btn-sm">
+                                    Reopen
+                                </button>
+                            )}
+                        </div>
+
+                        {report.reviewer && (
+                            <p className="text-xs text-ink-3">Last handled by {report.reviewer.name}</p>
+                        )}
+                    </div>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                    <Link
-                        href={`/reports/${report.id}`}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#176B4D] px-3 py-2 text-xs font-bold text-[#176B4D] hover:bg-[#EAF4EF]"
-                    >
-                        <FileText size={14} />
-                        Open case file
-                    </Link>
-
-                    {report.escalated_to ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#FBF6E8] px-3 py-2 text-xs font-bold text-[#7a5a12]">
-                            <Gavel size={14} />
-                            Referred to {report.escalated_to}
-                            {report.escalated_at && ` · ${formatDate(report.escalated_at)}`}
-                        </span>
-                    ) : referring ? (
-                        <>
-                            <select
-                                value={authority}
-                                onChange={(e) => setAuthority(e.target.value)}
-                                aria-label="Authority"
-                                className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
-                            >
-                                {authorities.map((a) => (
-                                    <option key={a}>{a}</option>
-                                ))}
-                            </select>
-                            <button
-                                type="button"
-                                onClick={() =>
-                                    router.post(
-                                        `/admin/reports/${report.id}/escalate`,
-                                        { escalated_to: authority, escalation_note: note },
-                                        { preserveScroll: true, onSuccess: () => setReferring(false) },
-                                    )
-                                }
-                                className="rounded-lg bg-[#d4623a] px-3 py-2 text-xs font-bold text-white hover:bg-[#b44a27]"
-                            >
-                                Confirm referral
-                            </button>
-                        </>
-                    ) : (
-                        <button
-                            type="button"
-                            onClick={() => setReferring(true)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#d4623a]/50 px-3 py-2 text-xs font-bold text-[#8f3a1b] hover:bg-[#fcebe3]"
-                        >
-                            <Gavel size={14} />
-                            Refer to authority
-                        </button>
-                    )}
-                </div>
-
-                {report.reviewer && (
-                    <p className="text-xs text-slate-400">
-                        Last reviewed by {report.reviewer.name}
-                    </p>
-                )}
-            </div>
+            )}
         </article>
     );
 }
 
-export default function Reports({ reports, status, counts, reasons, removalReasons, authorities }: Props) {
+export default function Reports({ reports, status, counts, reasons, removalReasons }: Props) {
     return (
         <AppLayout>
             <Head title="Admin · Reports" />
 
-            <div className="min-h-screen bg-[#F7F9F8] px-4 py-8 sm:px-6">
-                <div className="mx-auto max-w-4xl">
-                    <AdminNav title="Reports" />
+            <Page>
+                <AdminNav title="Reports" subtitle="Review what students have reported and decide what happens next" />
 
-                    <div className="mb-5 flex flex-wrap gap-2">
-                        {statuses.map((s) => (
-                            <Link
-                                key={s}
-                                href={`/admin/reports?status=${s}`}
-                                className={`rounded-lg px-3.5 py-2 text-sm font-semibold capitalize transition ${
-                                    status === s
-                                        ? 'bg-[#17352A] text-white'
-                                        : 'border border-[#DDE6E0] bg-white text-slate-600 hover:border-[#176B4D]'
-                                }`}
-                            >
-                                {s}
-                                {s !== 'all' && ` (${counts[s] ?? 0})`}
-                            </Link>
+                <div className="mb-5 flex flex-wrap gap-2">
+                    {filters.map((s) => (
+                        <Link
+                            key={s}
+                            href={`/admin/reports?status=${s}`}
+                            className={`rounded-xl px-4 py-2 text-sm font-bold capitalize transition ${
+                                status === s
+                                    ? 'bg-pine-950 text-white'
+                                    : 'border border-mist-200 bg-white text-ink-2 hover:border-pine-700 hover:text-pine-800'
+                            }`}
+                        >
+                            {s}
+                            {s !== 'all' && <span className="ml-1.5 opacity-70">{counts[s] ?? 0}</span>}
+                        </Link>
+                    ))}
+                </div>
+
+                {reports.data.length > 0 ? (
+                    <div className="space-y-4">
+                        {reports.data.map((report, i) => (
+                            <ReportCard
+                                key={report.id}
+                                report={report}
+                                reasons={reasons}
+                                removalReasons={removalReasons}
+                                defaultOpen={i === 0 && reports.data.length === 1}
+                            />
                         ))}
                     </div>
-
-                    {reports.data.length > 0 ? (
-                        <div className="space-y-4">
-                            {reports.data.map((report) => (
-                                <ReportCard
-                                    key={report.id}
-                                    report={report}
-                                    reasons={reasons}
-                                    removalReasons={removalReasons}
-                                    authorities={authorities}
-                                />
-                            ))}
-                        </div>
-                    ) : (
-                        <p className="rounded-2xl border border-dashed border-[#DDE6E0] bg-white px-6 py-14 text-center text-sm text-slate-500">
-                            No {status === 'all' ? '' : status} reports.
+                ) : (
+                    <div className="rounded-2xl border border-dashed border-mist-300 bg-white px-6 py-16 text-center">
+                        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-mist-100 text-pine-700">
+                            <Flag size={26} />
+                        </span>
+                        <p className="mt-4 font-display text-lg font-extrabold text-pine-950">
+                            No {status === 'all' ? '' : status} reports
                         </p>
-                    )}
+                        <p className="mt-1 text-sm text-ink-2">Nothing to review here right now.</p>
+                    </div>
+                )}
 
-                    <Pagination links={reports.links} />
-                </div>
-            </div>
+                <Pagination links={reports.links} />
+            </Page>
         </AppLayout>
     );
 }

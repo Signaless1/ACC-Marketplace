@@ -1,9 +1,9 @@
 import { Link, router } from '@inertiajs/react';
-import { Heart, Star, Tag } from 'lucide-react';
-import { formatPrice, RatingFields } from '../../types/shared';
-import ImagePlaceholder from './ImagePlaceholder';
+import { Heart, Package } from 'lucide-react';
+import { formatPrice } from '../../types/shared';
+import { RatingBadge } from './Stars';
 
-export interface CardListing extends RatingFields {
+export interface CardListing {
     id: number;
     title: string;
     price: string | number;
@@ -12,30 +12,19 @@ export interface CardListing extends RatingFields {
     status: 'available' | 'reserved' | 'sold';
     category: { id: number; name: string };
     images: { id: number; path: string }[];
+    seller?: { id: number; name: string };
+    rating_avg?: number | string | null;
+    rating_count?: number;
+    favorites_count?: number;
+    views_count?: number;
 }
 
 interface ListingCardProps {
     listing: CardListing;
     /** When provided, a heart toggle is shown. */
     favorited?: boolean;
-    layout?: 'grid' | 'list';
-}
-
-export function RatingLine({ listing }: { listing: RatingFields }) {
-    const count = listing.rating_count ?? 0;
-    const avg = Number(listing.rating_average ?? 0);
-
-    if (count === 0) {
-        return <span className="text-xs font-medium text-[#566860]">No ratings yet</span>;
-    }
-
-    return (
-        <span className="inline-flex items-center gap-1 text-xs text-[#43554c]">
-            <Star size={14} className="fill-amber-400 text-amber-400" />
-            <span className="font-bold text-[#12291f]">{avg.toFixed(1)}</span>
-            <span>({count})</span>
-        </span>
-    );
+    /** Horizontal layout for list view. */
+    layout?: 'grid' | 'row';
 }
 
 export default function ListingCard({ listing, favorited, layout = 'grid' }: ListingCardProps) {
@@ -44,24 +33,20 @@ export default function ListingCard({ listing, favorited, layout = 'grid' }: Lis
         router.post(`/listings/${listing.id}/favorite`, {}, { preserveScroll: true });
     };
 
-    const lowStock =
-        listing.status === 'available' &&
-        listing.quantity !== undefined &&
-        listing.quantity > 0 &&
-        listing.quantity <= 3;
-
-    const list = layout === 'list';
+    const unavailable = listing.status !== 'available';
+    const low = !unavailable && (listing.quantity ?? 0) > 0 && (listing.quantity ?? 0) <= 3;
+    const row = layout === 'row';
 
     return (
         <Link
             href={`/listings/${listing.id}`}
-            className={`group overflow-hidden rounded-2xl border border-[#E1E9E4] bg-white shadow-sm transition duration-200 hover:shadow-lg ${
-                list ? 'flex' : 'flex flex-col hover:-translate-y-1'
+            className={`group ui-card overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-lift)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-pine-700/25 ${
+                row ? 'flex' : 'block'
             }`}
         >
             <div
-                className={`relative overflow-hidden bg-slate-100 ${
-                    list ? 'h-40 w-40 shrink-0 sm:h-48 sm:w-56' : 'aspect-[4/3]'
+                className={`relative overflow-hidden bg-mist-100 ${
+                    row ? 'h-auto w-40 shrink-0 sm:w-56' : 'aspect-[4/3]'
                 }`}
             >
                 {listing.images.length > 0 ? (
@@ -69,19 +54,23 @@ export default function ListingCard({ listing, favorited, layout = 'grid' }: Lis
                         src={`/storage/${listing.images[0].path}`}
                         alt={listing.title}
                         loading="lazy"
-                        className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                        className={`h-full w-full object-cover transition duration-500 group-hover:scale-[1.04] ${
+                            unavailable ? 'opacity-60 saturate-50' : ''
+                        }`}
                     />
                 ) : (
-                    <ImagePlaceholder />
+                    <div className="flex h-full min-h-[120px] w-full items-center justify-center">
+                        <Package size={44} strokeWidth={1.4} className="text-mist-300" />
+                    </div>
                 )}
 
-                <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-xs font-semibold text-[#34483e] shadow-sm">
-                    {listing.type === 'item' ? 'Item' : 'Service'}
+                <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-bold text-pine-800 shadow-sm">
+                    {listing.type === 'service' ? 'Service' : listing.category.name}
                 </span>
 
-                {listing.status !== 'available' && (
-                    <span className="absolute bottom-3 left-3 rounded-full bg-[#12291f]/90 px-2.5 py-1 text-xs font-semibold capitalize text-white">
-                        {listing.status}
+                {unavailable && (
+                    <span className="absolute inset-x-0 bottom-0 bg-pine-950/80 py-1.5 text-center text-xs font-bold uppercase tracking-wider text-white">
+                        {listing.status === 'reserved' ? 'Reserved' : 'Sold out'}
                     </span>
                 )}
 
@@ -91,38 +80,34 @@ export default function ListingCard({ listing, favorited, layout = 'grid' }: Lis
                         onClick={toggleFavorite}
                         aria-label={favorited ? 'Remove from favorites' : 'Add to favorites'}
                         aria-pressed={favorited}
-                        className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-[#43554c] shadow-sm transition hover:text-red-500"
+                        className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-ink-2 shadow-sm transition hover:scale-105 hover:text-red-500"
                     >
                         <Heart size={17} className={favorited ? 'fill-red-500 text-red-500' : ''} />
                     </button>
                 )}
             </div>
 
-            <div className={`flex flex-1 flex-col p-4 ${list ? 'justify-between sm:p-5' : ''}`}>
+            <div className={`min-w-0 p-4 ${row ? 'flex flex-1 flex-col justify-between' : ''}`}>
                 <div>
-                    <div className="mb-1.5 flex items-center gap-1.5 text-xs text-[#566860]">
-                        <Tag size={13} />
-                        {listing.category.name}
-                    </div>
-
-                    <h3
-                        className={`line-clamp-2 font-semibold text-[#12291f] transition group-hover:text-[#176B4D] ${
-                            list ? 'text-lg' : 'min-h-[44px] text-base'
-                        }`}
-                    >
+                    <h3 className="line-clamp-2 min-h-[2.75rem] font-display text-[15px] font-bold leading-snug text-pine-950 transition group-hover:text-pine-700">
                         {listing.title}
                     </h3>
 
-                    <div className="mt-2">
-                        <RatingLine listing={listing} />
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                        <RatingBadge average={listing.rating_avg} count={listing.rating_count} />
+                        {listing.seller && (
+                            <span className="truncate text-xs text-ink-3">{listing.seller.name}</span>
+                        )}
                     </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-between gap-2">
-                    <p className="text-lg font-bold text-[#12291f]">{formatPrice(listing.price)}</p>
+                <div className="mt-3 flex items-end justify-between gap-2">
+                    <p className="font-display text-xl font-extrabold text-pine-900">
+                        {formatPrice(listing.price)}
+                    </p>
 
-                    {lowStock && (
-                        <span className="rounded-full bg-[#fcebe3] px-2 py-0.5 text-[11px] font-bold text-[#b44a27]">
+                    {low && (
+                        <span className="ui-chip shrink-0 whitespace-nowrap bg-sun-300/45 text-sun-800">
                             Only {listing.quantity} left
                         </span>
                     )}

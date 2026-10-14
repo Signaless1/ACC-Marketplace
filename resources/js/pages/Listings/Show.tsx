@@ -1,109 +1,91 @@
 import { Head, Link, router } from '@inertiajs/react';
 import {
     AlertTriangle,
-    CalendarDays,
-    CheckCircle2,
+    BadgeCheck,
+    ChevronLeft,
     ChevronRight,
+    Eye,
     Flag,
     Heart,
+    Link2,
     MapPin,
+    Maximize2,
     MessageCircle,
     Minus,
+    Package,
+    Pencil,
     Plus,
-    Share2,
     ShieldCheck,
     ShoppingBag,
-    Star,
-    Store,
+    Trash2,
 } from 'lucide-react';
 import { useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
 import Avatar from '../../components/ui/Avatar';
-import ImagePlaceholder from '../../components/ui/ImagePlaceholder';
+import { AttachmentGrid, Lightbox } from '../../components/ui/Attachments';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import ListingCard, { CardListing } from '../../components/ui/ListingCard';
-import Modal from '../../components/ui/Modal';
-import RatingStars from '../../components/ui/RatingStars';
-import RatingSummary from '../../components/ui/RatingSummary';
+import { Page } from '../../components/ui/PageHeader';
 import ReportModal from '../../components/ui/ReportModal';
-import ReviewForm from '../../components/ui/ReviewForm';
-import ReviewList, { ReviewItem } from '../../components/ui/ReviewList';
-import { formatDate, formatPrice } from '../../types/shared';
+import ReviewModal from '../../components/ui/ReviewModal';
+import Stars from '../../components/ui/Stars';
+import StatusBadge from '../../components/ui/StatusBadge';
+import { Attachment, formatDate, formatPrice, timeAgo } from '../../types/shared';
+
+interface Review {
+    id: number;
+    rating: number;
+    product_rating: number;
+    comment: string | null;
+    created_at: string;
+    reviewer: { id: number; name: string; avatar_url: string | null };
+    attachments: Attachment[];
+}
 
 interface Listing {
     id: number;
+    user_id: number;
     title: string;
     description: string;
-    price: number | string;
+    price: string;
     quantity: number;
     type: 'item' | 'service';
-    status: 'available' | 'reserved' | 'sold';
     condition: string | null;
+    status: 'available' | 'reserved' | 'sold';
+    views_count: number;
+    created_at: string;
     hidden_at: string | null;
     removed_reason: string | null;
+    removed_reason_label: string | null;
     removed_note: string | null;
-    views_count: number;
-    category: { id: number; name: string };
+    rating_avg: number | string | null;
+    rating_count: number;
+    favorites_count: number;
     seller: { id: number; name: string; avatar_url: string | null; created_at: string };
-    images: { id: number; path: string; sort_order: number }[];
-    created_at: string;
+    category: { id: number; name: string };
+    images: { id: number; path: string }[];
 }
 
 interface Props {
     listing: Listing;
     canEdit: boolean;
     isFavorited: boolean;
+    soldUnits: number;
     sellerRating: { average: number | null; count: number };
-    sellerStats: { active_listings: number; completed_sales: number };
-    productRating: { average: number | null; count: number; distribution: Record<string, number> };
-    reviews: ReviewItem[];
-    reviewableOrderId: number | null;
-    listingReviewOrderId: number | null;
-    fromSeller: CardListing[];
-    similar: CardListing[];
-    discover: CardListing[];
-    favoriteIds: number[];
+    ratingBreakdown: Record<string, number>;
+    reviews: Review[];
+    reviewableOrder: { id: number } | null;
+    sellerOtherListings: CardListing[];
+    similarListings: CardListing[];
+    featuredListings: CardListing[];
     reportReasons: Record<string, string>;
-    removalReasons?: Record<string, string>;
 }
 
-function Row({
-    title,
-    subtitle,
-    items,
-    favoriteIds,
-    action,
-}: {
-    title: string;
-    subtitle?: string;
-    items: CardListing[];
-    favoriteIds: number[];
-    action?: { href: string; label: string };
-}) {
-    if (items.length === 0) return null;
-
+function Row({ title, children }: { title: string; children: React.ReactNode }) {
     return (
         <section className="mt-12">
-            <div className="mb-4 flex items-end justify-between gap-4">
-                <div>
-                    <h2 className="font-sans text-xl font-bold text-[#12291f]">{title}</h2>
-                    {subtitle && <p className="mt-0.5 text-sm text-[#43554c]">{subtitle}</p>}
-                </div>
-                {action && (
-                    <Link
-                        href={action.href}
-                        className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-[#176B4D] hover:underline"
-                    >
-                        {action.label}
-                        <ChevronRight size={16} />
-                    </Link>
-                )}
-            </div>
-
-            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-                {items.slice(0, 4).map((item) => (
-                    <ListingCard key={item.id} listing={item} favorited={favoriteIds.includes(item.id)} />
-                ))}
-            </div>
+            <h2 className="mb-4 font-display text-xl font-extrabold text-pine-950">{title}</h2>
+            {children}
         </section>
     );
 }
@@ -112,29 +94,72 @@ export default function Show({
     listing,
     canEdit,
     isFavorited,
+    soldUnits,
     sellerRating,
-    sellerStats,
-    productRating,
+    ratingBreakdown,
     reviews,
-    reviewableOrderId,
-    listingReviewOrderId,
-    fromSeller,
-    similar,
-    discover,
-    favoriteIds,
+    reviewableOrder,
+    sellerOtherListings,
+    similarListings,
+    featuredListings,
     reportReasons,
 }: Props) {
-    const [activeImage, setActiveImage] = useState(0);
-    const [reporting, setReporting] = useState(false);
-    const [ordering, setOrdering] = useState(false);
+    const [active, setActive] = useState(0);
+    const [zoom, setZoom] = useState(false);
     const [quantity, setQuantity] = useState(1);
-    const [placing, setPlacing] = useState(false);
+    const [dialog, setDialog] = useState<'order' | 'delete' | null>(null);
+    const [reporting, setReporting] = useState(false);
+    const [reviewing, setReviewing] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [busy, setBusy] = useState(false);
 
-    const mainImage = listing.images[activeImage] ?? listing.images[0];
-    const maxQty = Math.max(1, listing.quantity);
-    const total = Number(listing.price) * quantity;
-    const sellerFirst = listing.seller.name.split(' ')[0];
+    const images = listing.images;
+    const main = images[active] ?? images[0];
+    const lightboxImages: Attachment[] = images.map((image) => ({
+        id: image.id,
+        url: `/storage/${image.path}`,
+        original_name: listing.title,
+        mime: 'image/jpeg',
+        size: 0,
+        human_size: '',
+        kind: 'image',
+    }));
+
+    const avg = listing.rating_avg === null ? null : Number(listing.rating_avg);
+    const available = listing.status === 'available' && listing.quantity > 0 && !listing.hidden_at;
+    const maxQty = Math.max(1, Math.min(listing.quantity, 99));
+    const safeQty = Math.min(Math.max(1, quantity), maxQty);
+    const total = Number(listing.price) * safeQty;
+    const totalReviews = Object.values(ratingBreakdown).reduce((a, b) => a + b, 0);
+
+    const go = (delta: number) => setActive((i) => (i + delta + images.length) % images.length);
+
+    const toggleFavorite = () =>
+        router.post(`/listings/${listing.id}/favorite`, {}, { preserveScroll: true });
+
+    const messageSeller = () => router.post(`/listings/${listing.id}/message`);
+
+    const placeOrder = () =>
+        router.post(
+            `/listings/${listing.id}/order`,
+            { quantity: safeQty },
+            {
+                onStart: () => setBusy(true),
+                onFinish: () => {
+                    setBusy(false);
+                    setDialog(null);
+                },
+            },
+        );
+
+    const deleteListing = () =>
+        router.delete(`/listings/${listing.id}`, {
+            onStart: () => setBusy(true),
+            onFinish: () => {
+                setBusy(false);
+                setDialog(null);
+            },
+        });
 
     const copyLink = async () => {
         try {
@@ -146,506 +171,509 @@ export default function Show({
         }
     };
 
-    const placeOrder = () => {
-        router.post(
-            `/listings/${listing.id}/order`,
-            { quantity },
-            {
-                onStart: () => setPlacing(true),
-                onFinish: () => {
-                    setPlacing(false);
-                    setOrdering(false);
-                },
-            },
-        );
-    };
-
-    const handleDelete = () => {
-        if (window.confirm('Delete this listing? This cannot be undone.')) {
-            router.delete(`/listings/${listing.id}`);
-        }
-    };
-
-    const stock =
-        listing.status !== 'available' ? null : listing.quantity <= 3 ? (
-            <span className="rounded-full bg-[#fcebe3] px-2.5 py-1 text-xs font-bold text-[#b44a27]">
-                Only {listing.quantity} left
-            </span>
-        ) : (
-            <span className="rounded-full bg-[#EAF4EF] px-2.5 py-1 text-xs font-bold text-[#12583F]">
-                {listing.quantity} in stock
-            </span>
-        );
+    const stockLabel =
+        listing.hidden_at
+            ? 'Removed'
+            : listing.status === 'sold'
+              ? 'Sold out'
+              : listing.status === 'reserved'
+                ? 'Reserved for a buyer'
+                : listing.quantity <= 3
+                  ? `Only ${listing.quantity} left`
+                  : `${listing.quantity} available`;
 
     return (
         <AppLayout>
             <Head title={listing.title} />
 
-            <div className="mx-auto max-w-6xl">
-                <nav aria-label="Breadcrumb" className="mb-5 flex flex-wrap items-center gap-1.5 text-sm text-[#43554c]">
-                    <Link href="/marketplace" className="font-semibold hover:text-[#176B4D]">
-                        Marketplace
-                    </Link>
+            <Page>
+                {/* Breadcrumb */}
+                <nav aria-label="Breadcrumb" className="mb-5 flex flex-wrap items-center gap-1.5 text-[13px] text-ink-3">
+                    <Link href="/marketplace" className="font-semibold hover:text-pine-700">Marketplace</Link>
                     <ChevronRight size={14} />
                     <Link
                         href={`/marketplace?category=${listing.category.id}`}
-                        className="font-semibold hover:text-[#176B4D]"
+                        className="font-semibold hover:text-pine-700"
                     >
                         {listing.category.name}
                     </Link>
                     <ChevronRight size={14} />
-                    <span className="line-clamp-1 text-[#12291f]">{listing.title}</span>
+                    <span className="max-w-[16rem] truncate font-semibold text-ink-2">{listing.title}</span>
                 </nav>
 
-                {listing.hidden_at && canEdit && (
-                    <div className="mb-5 flex gap-3 rounded-2xl border border-[#f0c4b2] bg-[#fcebe3] p-4 text-sm text-[#7d2f14]">
-                        <AlertTriangle className="mt-0.5 shrink-0" size={20} />
+                {/* Moderation notice for the seller (or an admin looking at it) */}
+                {listing.hidden_at && (
+                    <div role="alert" className="mb-6 flex gap-4 rounded-2xl border border-red-200 bg-red-50 p-5">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600">
+                            <AlertTriangle size={20} />
+                        </span>
                         <div>
-                            <p className="font-bold">This listing was removed by a moderator</p>
-                            <p className="mt-0.5">
-                                Reason:{' '}
-                                <strong>
-                                    {listing.removed_reason ? humanize(listing.removed_reason) : 'Not specified'}
-                                </strong>
-                                . Only you and moderators can see it.
+                            <p className="font-display text-base font-extrabold text-red-900">
+                                A moderator removed this listing
                             </p>
-                            {listing.removed_note && <p className="mt-1">“{listing.removed_note}”</p>}
+                            <p className="mt-1 text-sm text-red-900/90">
+                                <strong>Reason:</strong> {listing.removed_reason_label ?? 'No reason recorded'}
+                                {listing.removed_note && <> — {listing.removed_note}</>}
+                            </p>
+                            <p className="mt-2 text-[13px] text-red-900/80">
+                                Buyers cannot see it. If you think this was a mistake, contact the marketplace
+                                administrators. You can still delete it.
+                            </p>
                         </div>
                     </div>
                 )}
 
-                <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="grid gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
                     {/* Gallery */}
                     <div>
-                        <div className="aspect-[4/3] overflow-hidden rounded-3xl border border-[#E1E9E4] bg-white shadow-sm">
-                            {mainImage ? (
-                                <img
-                                    src={`/storage/${mainImage.path}`}
-                                    alt={listing.title}
-                                    className="h-full w-full object-cover"
-                                />
+                        <div className="group relative aspect-[4/3] overflow-hidden rounded-3xl bg-mist-100 ring-1 ring-mist-200">
+                            {main ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() => setZoom(true)}
+                                        aria-label="Zoom image"
+                                        className="absolute inset-0 cursor-zoom-in"
+                                    >
+                                        <img
+                                            src={`/storage/${main.path}`}
+                                            alt={listing.title}
+                                            className="h-full w-full object-contain"
+                                        />
+                                    </button>
+
+                                    <span className="pointer-events-none absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink-2 opacity-0 shadow-sm transition group-hover:opacity-100">
+                                        <Maximize2 size={16} />
+                                    </span>
+
+                                    {images.length > 1 && (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => go(-1)}
+                                                aria-label="Previous photo"
+                                                className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-ink shadow-md transition hover:bg-white"
+                                            >
+                                                <ChevronLeft size={20} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => go(1)}
+                                                aria-label="Next photo"
+                                                className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-ink shadow-md transition hover:bg-white"
+                                            >
+                                                <ChevronRight size={20} />
+                                            </button>
+                                            <span className="absolute bottom-3 right-3 rounded-full bg-pine-950/70 px-3 py-1 text-xs font-semibold text-white">
+                                                {active + 1} / {images.length}
+                                            </span>
+                                        </>
+                                    )}
+                                </>
                             ) : (
-                                <ImagePlaceholder label="No photo for this listing" size={44} />
+                                <div className="flex h-full flex-col items-center justify-center gap-2 text-ink-3">
+                                    <Package size={56} strokeWidth={1.3} />
+                                    <span className="text-sm font-medium">The seller has not added photos</span>
+                                </div>
+                            )}
+
+                            {!available && !listing.hidden_at && (
+                                <span className="absolute left-4 top-4 rounded-full bg-pine-950/85 px-3.5 py-1.5 text-xs font-bold uppercase tracking-wider text-white">
+                                    {listing.status === 'reserved' ? 'Reserved' : 'Sold out'}
+                                </span>
                             )}
                         </div>
 
-                        {listing.images.length > 1 && (
-                            <div className="mt-3 grid grid-cols-5 gap-3">
-                                {listing.images.map((image, index) => (
-                                    <button
-                                        type="button"
-                                        key={image.id}
-                                        onClick={() => setActiveImage(index)}
-                                        aria-label={`Show image ${index + 1}`}
-                                        aria-pressed={index === activeImage}
-                                        className={`aspect-square overflow-hidden rounded-xl bg-white ring-2 transition ${
-                                            index === activeImage
-                                                ? 'ring-[#176B4D]'
-                                                : 'ring-transparent hover:ring-[#BFD8CA]'
-                                        }`}
-                                    >
-                                        <img
-                                            src={`/storage/${image.path}`}
-                                            alt=""
-                                            loading="lazy"
-                                            className="h-full w-full object-cover"
-                                        />
-                                    </button>
+                        {images.length > 1 && (
+                            <ul className="mt-3 grid grid-cols-5 gap-2.5 sm:grid-cols-6">
+                                {images.map((image, index) => (
+                                    <li key={image.id}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setActive(index)}
+                                            aria-label={`Show photo ${index + 1}`}
+                                            aria-pressed={index === active}
+                                            className={`aspect-square w-full overflow-hidden rounded-xl bg-mist-100 ring-2 transition ${
+                                                index === active ? 'ring-pine-700' : 'ring-transparent hover:ring-mist-300'
+                                            }`}
+                                        >
+                                            <img
+                                                src={`/storage/${image.path}`}
+                                                alt=""
+                                                loading="lazy"
+                                                className="h-full w-full object-cover"
+                                            />
+                                        </button>
+                                    </li>
                                 ))}
-                            </div>
+                            </ul>
                         )}
-
-                        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                            {[
-                                { icon: ShieldCheck, t: 'ACC students only', d: 'Every seller is a verified student' },
-                                { icon: MapPin, t: 'Meet on campus', d: 'Trade in a safe, public place' },
-                                { icon: Flag, t: 'Report a problem', d: 'We review every report' },
-                            ].map(({ icon: Icon, t, d }) => (
-                                <div key={t} className="flex gap-3 rounded-2xl bg-[#F3F8F5] p-3.5">
-                                    <Icon size={20} className="mt-0.5 shrink-0 text-[#176B4D]" />
-                                    <div>
-                                        <p className="text-sm font-bold text-[#12291f]">{t}</p>
-                                        <p className="text-xs text-[#43554c]">{d}</p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
                     </div>
 
                     {/* Buy box */}
-                    <div className="surface-card self-start p-6 lg:sticky lg:top-24">
+                    <div>
                         <div className="flex flex-wrap items-center gap-2">
-                            <span
-                                className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${
-                                    listing.status === 'available'
-                                        ? 'bg-emerald-50 text-emerald-800'
-                                        : listing.status === 'reserved'
-                                          ? 'bg-amber-50 text-amber-800'
-                                          : 'bg-slate-100 text-slate-700'
-                                }`}
-                            >
-                                {listing.status}
+                            <span className="ui-chip bg-mist-100 text-pine-800">{listing.category.name}</span>
+                            <span className="ui-chip bg-mist-100 text-pine-800">
+                                {listing.type === 'service' ? 'Service' : 'Item'}
                             </span>
-                            <span className="rounded-full bg-[#F3F8F5] px-3 py-1 text-xs font-semibold text-[#34483e]">
-                                {listing.type === 'item' ? 'Item' : 'Service'}
-                            </span>
-                            {stock}
+                            {listing.condition && listing.type === 'item' && (
+                                <span className="ui-chip bg-sun-300/45 text-sun-800">{listing.condition}</span>
+                            )}
                         </div>
 
-                        <h1 className="mt-4 font-sans text-2xl font-bold leading-tight text-[#12291f] sm:text-3xl">
+                        <h1 className="mt-3 font-display text-[1.9rem] font-extrabold leading-tight text-pine-950 sm:text-4xl">
                             {listing.title}
                         </h1>
 
-                        <a href="#reviews" className="mt-2 inline-flex items-center gap-2 text-sm">
-                            {productRating.average !== null ? (
-                                <>
-                                    <RatingStars value={productRating.average} size={16} />
-                                    <span className="font-bold text-[#12291f]">{productRating.average.toFixed(1)}</span>
-                                    <span className="text-[#43554c] underline-offset-2 hover:underline">
-                                        {productRating.count} rating{productRating.count === 1 ? '' : 's'}
+                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-ink-2">
+                            {avg !== null && listing.rating_count > 0 ? (
+                                <a href="#reviews" className="inline-flex items-center gap-2 font-semibold hover:text-pine-700">
+                                    <Stars value={avg} size={17} />
+                                    <span>{avg.toFixed(1)}</span>
+                                    <span className="text-ink-3">
+                                        ({listing.rating_count} review{listing.rating_count === 1 ? '' : 's'})
                                     </span>
-                                </>
+                                </a>
                             ) : (
-                                <span className="text-[#43554c]">No ratings yet</span>
+                                <span className="text-ink-3">No reviews yet</span>
                             )}
-                        </a>
+                            {soldUnits > 0 && <span>{soldUnits} sold</span>}
+                            <span className="inline-flex items-center gap-1"><Eye size={15} />{listing.views_count} views</span>
+                            <span className="inline-flex items-center gap-1"><Heart size={15} />{listing.favorites_count} saved</span>
+                        </div>
 
-                        <p className="mt-4 font-sans text-3xl font-extrabold text-[#176B4D]">
+                        <p className="mt-5 font-display text-[2.4rem] font-extrabold leading-none text-pine-900">
                             {formatPrice(listing.price)}
-                            {listing.type === 'item' && listing.quantity > 1 && (
-                                <span className="ml-2 text-sm font-medium text-[#43554c]">each</span>
+                            {listing.quantity > 1 && listing.type === 'item' && (
+                                <span className="ml-2 text-sm font-semibold text-ink-3">each</span>
                             )}
                         </p>
 
-                        <dl className="mt-5 grid grid-cols-2 gap-4 border-y border-[#E7EEE9] py-4 text-sm">
-                            <div>
-                                <dt className="text-xs font-bold uppercase tracking-wide text-[#566860]">Category</dt>
-                                <dd className="mt-1 font-semibold text-[#12291f]">{listing.category.name}</dd>
-                            </div>
-                            {listing.condition && (
-                                <div>
-                                    <dt className="text-xs font-bold uppercase tracking-wide text-[#566860]">
-                                        Condition
-                                    </dt>
-                                    <dd className="mt-1 font-semibold text-[#12291f]">{listing.condition}</dd>
-                                </div>
-                            )}
-                        </dl>
+                        <p
+                            className={`mt-3 inline-flex items-center gap-2 text-sm font-bold ${
+                                available ? (listing.quantity <= 3 ? 'text-sun-800' : 'text-pine-700') : 'text-ink-3'
+                            }`}
+                        >
+                            <span
+                                className={`h-2.5 w-2.5 rounded-full ${
+                                    available ? (listing.quantity <= 3 ? 'bg-sun-500' : 'bg-pine-600') : 'bg-mist-300'
+                                }`}
+                            />
+                            {stockLabel}
+                        </p>
 
-                        {/* Buyer actions */}
-                        {!canEdit && (
-                            <div className="mt-5">
-                                {listing.status === 'available' && (
-                                    <>
-                                        <div className="mb-4 flex items-center justify-between">
-                                            <span className="text-sm font-bold text-[#12291f]">Quantity</span>
-                                            <div className="inline-flex items-center rounded-xl border border-[#cfdcd4] bg-white">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                                                    disabled={quantity <= 1}
-                                                    aria-label="Decrease quantity"
-                                                    className="flex h-10 w-10 items-center justify-center text-[#34483e] hover:bg-[#EAF4EF] disabled:opacity-40"
-                                                >
-                                                    <Minus size={16} />
-                                                </button>
-                                                <span
-                                                    aria-live="polite"
-                                                    className="w-12 text-center text-sm font-bold text-[#12291f]"
-                                                >
-                                                    {quantity}
-                                                </span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setQuantity((q) => Math.min(maxQty, q + 1))}
-                                                    disabled={quantity >= maxQty}
-                                                    aria-label="Increase quantity"
-                                                    className="flex h-10 w-10 items-center justify-center text-[#34483e] hover:bg-[#EAF4EF] disabled:opacity-40"
-                                                >
-                                                    <Plus size={16} />
-                                                </button>
-                                            </div>
+                        {/* Actions */}
+                        {canEdit ? (
+                            <div className="mt-6 ui-card p-5">
+                                <p className="text-sm font-bold text-ink">This is your listing</p>
+                                <div className="mt-3 flex flex-wrap gap-2.5">
+                                    <Link href={`/listings/${listing.id}/edit`} className="ui-btn ui-btn-primary">
+                                        <Pencil size={16} /> Edit listing
+                                    </Link>
+                                    <button type="button" onClick={() => setDialog('delete')} className="ui-btn ui-btn-danger-outline">
+                                        <Trash2 size={16} /> Delete
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="mt-6 space-y-4">
+                                {available && (
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-sm font-bold text-ink">Quantity</span>
+                                        <div className="flex items-center overflow-hidden rounded-xl border border-pine-900/20 bg-white">
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuantity(Math.max(1, safeQty - 1))}
+                                                disabled={safeQty <= 1}
+                                                aria-label="Decrease quantity"
+                                                className="flex h-11 w-11 items-center justify-center text-ink-2 transition hover:bg-mist-100 disabled:opacity-40"
+                                            >
+                                                <Minus size={16} />
+                                            </button>
+                                            <span className="w-12 text-center text-[15px] font-extrabold" aria-live="polite">
+                                                {safeQty}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuantity(Math.min(maxQty, safeQty + 1))}
+                                                disabled={safeQty >= maxQty}
+                                                aria-label="Increase quantity"
+                                                className="flex h-11 w-11 items-center justify-center text-ink-2 transition hover:bg-mist-100 disabled:opacity-40"
+                                            >
+                                                <Plus size={16} />
+                                            </button>
                                         </div>
-
-                                        <button
-                                            type="button"
-                                            onClick={() => setOrdering(true)}
-                                            className="accent-btn flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 font-bold"
-                                        >
-                                            <ShoppingBag size={19} />
-                                            Order now · {formatPrice(total)}
-                                        </button>
-                                    </>
-                                )}
-
-                                {listing.status === 'reserved' && (
-                                    <div className="flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-5 py-3.5 font-bold text-amber-800">
-                                        <ShoppingBag size={19} />
-                                        Currently reserved
+                                        {safeQty > 1 && (
+                                            <span className="text-sm text-ink-2">
+                                                Total <strong className="text-ink">{formatPrice(total)}</strong>
+                                            </span>
+                                        )}
                                     </div>
                                 )}
 
-                                {listing.status === 'sold' && (
-                                    <div className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-5 py-3.5 font-bold text-slate-700">
-                                        <CheckCircle2 size={19} />
-                                        Sold out
-                                    </div>
-                                )}
-
-                                <Link
-                                    href={`/listings/${listing.id}/message`}
-                                    method="post"
-                                    as="button"
-                                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-[#176B4D] bg-white px-5 py-3 font-bold text-[#176B4D] transition hover:bg-[#EAF4EF]"
-                                >
-                                    <MessageCircle size={19} />
-                                    Message {sellerFirst}
-                                </Link>
-                            </div>
-                        )}
-
-                        {/* Owner actions */}
-                        {canEdit && (
-                            <div className="mt-5 space-y-3">
-                                <div className="rounded-xl bg-[#F3F8F5] p-3 text-sm text-[#34483e]">
-                                    {listing.views_count} view{listing.views_count === 1 ? '' : 's'} ·{' '}
-                                    {listing.quantity} unit{listing.quantity === 1 ? '' : 's'} left
+                                <div className="flex flex-wrap gap-2.5">
+                                    <button
+                                        type="button"
+                                        disabled={!available}
+                                        onClick={() => setDialog('order')}
+                                        className="ui-btn ui-btn-primary ui-btn-lg min-w-[11rem] flex-1"
+                                    >
+                                        <ShoppingBag size={18} />
+                                        {available ? 'Order now' : listing.status === 'reserved' ? 'Reserved' : 'Unavailable'}
+                                    </button>
+                                    <button type="button" onClick={messageSeller} className="ui-btn ui-btn-outline ui-btn-lg flex-1">
+                                        <MessageCircle size={18} />
+                                        Message seller
+                                    </button>
                                 </div>
-                                <Link
-                                    href={`/listings/${listing.id}/edit`}
-                                    className="flex w-full items-center justify-center rounded-xl bg-[#176B4D] px-5 py-3 font-bold text-white transition hover:bg-[#12583F]"
-                                >
-                                    Edit listing
-                                </Link>
-                                <button
-                                    type="button"
-                                    onClick={handleDelete}
-                                    className="flex w-full items-center justify-center rounded-xl border border-red-200 bg-red-50 px-5 py-3 font-bold text-red-700 transition hover:bg-red-100"
-                                >
-                                    Delete listing
-                                </button>
+
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={toggleFavorite}
+                                        aria-pressed={isFavorited}
+                                        className="ui-btn ui-btn-ghost ui-btn-sm"
+                                    >
+                                        <Heart size={16} className={isFavorited ? 'fill-red-500 text-red-500' : ''} />
+                                        {isFavorited ? 'Saved' : 'Save'}
+                                    </button>
+                                    <button type="button" onClick={copyLink} className="ui-btn ui-btn-ghost ui-btn-sm">
+                                        <Link2 size={16} />
+                                        {copied ? 'Link copied!' : 'Share'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setReporting(true)}
+                                        className="ui-btn ui-btn-sm ml-auto text-ink-3 hover:bg-red-50 hover:text-red-700"
+                                    >
+                                        <Flag size={15} />
+                                        Report
+                                    </button>
+                                </div>
                             </div>
                         )}
 
-                        <div className="mt-5 flex flex-wrap gap-2">
-                            {!canEdit && (
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        router.post(`/listings/${listing.id}/favorite`, {}, { preserveScroll: true })
-                                    }
-                                    aria-pressed={isFavorited}
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#dce6e0] px-3 py-2 text-xs font-bold text-[#34483e] transition hover:bg-[#F3F8F5]"
-                                >
-                                    <Heart size={15} className={isFavorited ? 'fill-red-500 text-red-500' : ''} />
-                                    {isFavorited ? 'Saved' : 'Save'}
-                                </button>
-                            )}
-                            <button
-                                type="button"
-                                onClick={copyLink}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-[#dce6e0] px-3 py-2 text-xs font-bold text-[#34483e] transition hover:bg-[#F3F8F5]"
-                            >
-                                <Share2 size={15} />
-                                {copied ? 'Link copied!' : 'Share'}
-                            </button>
-                            {!canEdit && (
-                                <button
-                                    type="button"
-                                    onClick={() => setReporting(true)}
-                                    className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-[#566860] transition hover:bg-red-50 hover:text-red-700"
-                                >
-                                    <Flag size={14} />
-                                    Report
-                                </button>
-                            )}
+                        {/* Seller */}
+                        <section className="mt-6 ui-card p-5" aria-label="Seller">
+                            <div className="flex items-center gap-4">
+                                <Avatar name={listing.seller.name} url={listing.seller.avatar_url} size={56} />
+                                <div className="min-w-0 flex-1">
+                                    <Link
+                                        href={`/users/${listing.seller.id}`}
+                                        className="block truncate font-display text-lg font-extrabold text-pine-950 hover:text-pine-700"
+                                    >
+                                        {listing.seller.name}
+                                    </Link>
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] text-ink-2">
+                                        {sellerRating.average !== null ? (
+                                            <>
+                                                <Stars value={sellerRating.average} size={14} />
+                                                <span className="font-semibold">{sellerRating.average.toFixed(1)}</span>
+                                                <span className="text-ink-3">({sellerRating.count})</span>
+                                            </>
+                                        ) : (
+                                            <span className="text-ink-3">New seller</span>
+                                        )}
+                                    </div>
+                                    <p className="mt-0.5 text-xs text-ink-3">
+                                        Member since {formatDate(listing.seller.created_at)}
+                                    </p>
+                                </div>
+                                <Link href={`/users/${listing.seller.id}`} className="ui-btn ui-btn-outline ui-btn-sm">
+                                    View profile
+                                </Link>
+                            </div>
+                        </section>
+
+                        <div className="mt-4 flex gap-3 rounded-2xl bg-mist-100 p-4 text-[13px] leading-relaxed text-ink-2">
+                            <ShieldCheck className="mt-0.5 shrink-0 text-pine-700" size={20} />
+                            <p>
+                                <strong className="text-ink">Trade safely.</strong> Meet on campus during the day,
+                                check the item before you pay, and keep the conversation in the app.
+                            </p>
                         </div>
                     </div>
                 </div>
 
-                {/* Seller */}
-                <section className="surface-card mt-10 flex flex-col gap-5 p-6 sm:flex-row sm:items-center">
-                    <Avatar name={listing.seller.name} url={listing.seller.avatar_url} size={64} />
-
-                    <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold uppercase tracking-wide text-[#566860]">Sold by</p>
-                        <Link
-                            href={`/users/${listing.seller.id}`}
-                            className="font-sans text-lg font-bold text-[#12291f] hover:text-[#176B4D]"
-                        >
-                            {listing.seller.name}
-                        </Link>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[#43554c]">
-                            {sellerRating.average !== null ? (
-                                <span className="inline-flex items-center gap-1.5">
-                                    <RatingStars value={sellerRating.average} size={14} />
-                                    <strong className="text-[#12291f]">{sellerRating.average.toFixed(1)}</strong>(
-                                    {sellerRating.count})
-                                </span>
-                            ) : (
-                                <span>No seller reviews yet</span>
-                            )}
-                            <span className="inline-flex items-center gap-1.5">
-                                <CalendarDays size={14} />
-                                Member since {formatDate(listing.seller.created_at)}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 text-center">
-                        <div className="rounded-xl bg-[#F3F8F5] px-5 py-3">
-                            <p className="font-sans text-xl font-bold text-[#12291f]">{sellerStats.active_listings}</p>
-                            <p className="text-xs text-[#43554c]">Listings</p>
-                        </div>
-                        <div className="rounded-xl bg-[#F3F8F5] px-5 py-3">
-                            <p className="font-sans text-xl font-bold text-[#12291f]">{sellerStats.completed_sales}</p>
-                            <p className="text-xs text-[#43554c]">Sales</p>
-                        </div>
-                    </div>
-
-                    <Link
-                        href={`/users/${listing.seller.id}`}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#cfdcd4] px-4 py-2.5 text-sm font-bold text-[#34483e] hover:bg-[#F3F8F5]"
-                    >
-                        <Store size={16} />
-                        Visit shop
-                    </Link>
-                </section>
-
-                {/* Description */}
-                <section className="surface-card mt-6 p-6">
-                    <h2 className="font-sans text-xl font-bold text-[#12291f]">About this {listing.type}</h2>
-                    <p className="mt-3 whitespace-pre-line break-words leading-7 text-[#2f4a3d]">
-                        {listing.description}
-                    </p>
-
-                    <h3 className="mt-6 font-sans text-sm font-bold uppercase tracking-wide text-[#566860]">
-                        Details
-                    </h3>
-                    <dl className="mt-3 divide-y divide-[#E7EEE9] rounded-xl border border-[#E7EEE9] text-sm">
-                        {[
-                            ['Category', listing.category.name],
-                            ['Type', listing.type === 'item' ? 'Item' : 'Service'],
-                            ['Condition', listing.condition ?? 'Not specified'],
-                            ['Available units', String(listing.quantity)],
-                            ['Posted', formatDate(listing.created_at)],
-                        ].map(([k, v]) => (
-                            <div key={k} className="grid grid-cols-[140px_1fr] gap-3 px-4 py-2.5">
-                                <dt className="font-semibold text-[#43554c]">{k}</dt>
-                                <dd className="text-[#12291f]">{v}</dd>
-                            </div>
-                        ))}
-                    </dl>
-                </section>
-
-                {/* Reviews & comments */}
-                <section id="reviews" className="surface-card mt-6 scroll-mt-24 p-6">
-                    <div className="mb-5 flex items-center gap-2">
-                        <Star size={20} className="fill-amber-400 text-amber-400" />
-                        <h2 className="font-sans text-xl font-bold text-[#12291f]">Ratings &amp; comments</h2>
-                    </div>
-
-                    {productRating.average !== null && (
-                        <div className="mb-6">
-                            <RatingSummary
-                                average={productRating.average}
-                                count={productRating.count}
-                                distribution={productRating.distribution}
-                            />
-                        </div>
-                    )}
-
-                    {listingReviewOrderId && (
-                        <div className="mb-6 rounded-2xl border border-[#cfe3d8] bg-[#F6FAF7] p-5">
-                            <h3 className="mb-3 font-sans text-base font-bold text-[#12291f]">
-                                You bought this. How was it?
-                            </h3>
-                            <ReviewForm
-                                sellerName={listing.seller.name}
-                                orders={[{ id: listingReviewOrderId, listing: { id: listing.id, title: listing.title } }]}
-                            />
-                        </div>
-                    )}
-
-                    {!listingReviewOrderId && reviewableOrderId && (
-                        <Link
-                            href={`/users/${listing.seller.id}?order=${reviewableOrderId}#leave-review`}
-                            className="mb-6 inline-flex rounded-xl bg-[#176B4D] px-4 py-2 text-sm font-bold text-white hover:bg-[#12583F]"
-                        >
-                            Review your purchase from {sellerFirst}
-                        </Link>
-                    )}
-
-                    <ReviewList reviews={reviews} canReply={canEdit} />
-                </section>
-
-                <Row
-                    title={`More from ${sellerFirst}`}
-                    subtitle="Other listings from this seller"
-                    items={fromSeller}
-                    favoriteIds={favoriteIds}
-                    action={{ href: `/users/${listing.seller.id}`, label: 'See all' }}
-                />
-                <Row
-                    title="Similar items"
-                    subtitle={`More in ${listing.category.name}`}
-                    items={similar}
-                    favoriteIds={favoriteIds}
-                    action={{ href: `/marketplace?category=${listing.category.id}`, label: 'Browse category' }}
-                />
-                <Row
-                    title="You might also like"
-                    subtitle="Keep browsing the marketplace"
-                    items={discover}
-                    favoriteIds={favoriteIds}
-                    action={{ href: '/marketplace', label: 'View everything' }}
-                />
-            </div>
-
-            {ordering && (
-                <Modal title="Confirm your order" onClose={() => setOrdering(false)}>
-                    <div className="space-y-4 text-sm text-[#2f4a3d]">
-                        <div className="flex items-center gap-3 rounded-xl bg-[#F3F8F5] p-3">
-                            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg">
-                                {mainImage ? (
-                                    <img src={`/storage/${mainImage.path}`} alt="" className="h-full w-full object-cover" />
-                                ) : (
-                                    <ImagePlaceholder size={20} />
-                                )}
-                            </div>
-                            <div className="min-w-0">
-                                <p className="line-clamp-2 font-bold text-[#12291f]">{listing.title}</p>
-                                <p>
-                                    {quantity} × {formatPrice(listing.price)}
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center justify-between border-t border-[#E7EEE9] pt-3 text-base">
-                            <span className="font-semibold">Total</span>
-                            <span className="font-sans text-xl font-extrabold text-[#176B4D]">{formatPrice(total)}</span>
-                        </div>
-                        <p className="text-xs text-[#43554c]">
-                            This sends an order request to {listing.seller.name}. You pay in person when you meet.
+                {/* Description + details */}
+                <div className="mt-12 grid items-start gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+                    <section className="ui-card p-6">
+                        <h2 className="font-display text-xl font-extrabold text-pine-950">About this {listing.type}</h2>
+                        <p className="mt-3 whitespace-pre-line break-words text-[15px] leading-7 text-ink-2">
+                            {listing.description}
                         </p>
-                        <div className="flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={() => setOrdering(false)}
-                                className="rounded-xl border border-[#cfdcd4] px-4 py-2.5 font-semibold text-[#34483e] hover:bg-slate-50"
-                            >
-                                Cancel
+                    </section>
+
+                    <section className="ui-card p-6">
+                        <h2 className="font-display text-xl font-extrabold text-pine-950">Details</h2>
+                        <dl className="mt-3 divide-y divide-mist-100 text-sm">
+                            {[
+                                ['Category', listing.category.name],
+                                ['Type', listing.type === 'service' ? 'Service' : 'Item'],
+                                ...(listing.type === 'item' && listing.condition ? [['Condition', listing.condition]] : []),
+                                ['Stock', stockLabel],
+                                ['Posted', `${formatDate(listing.created_at)} (${timeAgo(listing.created_at)})`],
+                            ].map(([label, value]) => (
+                                <div key={label} className="flex justify-between gap-4 py-2.5">
+                                    <dt className="text-ink-3">{label}</dt>
+                                    <dd className="text-right font-semibold text-ink">{value}</dd>
+                                </div>
+                            ))}
+                            <div className="flex items-center justify-between gap-4 py-2.5">
+                                <dt className="text-ink-3">Status</dt>
+                                <dd><StatusBadge status={listing.hidden_at ? 'removed' : listing.status} /></dd>
+                            </div>
+                        </dl>
+                        <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-ink-3">
+                            <MapPin size={14} className="mt-0.5 shrink-0" />
+                            Pick-up is arranged in Messages. Payment is made in person.
+                        </p>
+                    </section>
+                </div>
+
+                {/* Reviews */}
+                <section id="reviews" className="mt-12 scroll-mt-24">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <h2 className="font-display text-xl font-extrabold text-pine-950">Ratings &amp; reviews</h2>
+                        {reviewableOrder && (
+                            <button type="button" onClick={() => setReviewing(true)} className="ui-btn ui-btn-gold ui-btn-sm">
+                                Write a review
                             </button>
-                            <button
-                                type="button"
-                                onClick={placeOrder}
-                                disabled={placing}
-                                className="accent-btn rounded-xl px-5 py-2.5 font-bold"
-                            >
-                                {placing ? 'Placing…' : 'Place order'}
-                            </button>
+                        )}
+                    </div>
+
+                    <div className="grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+                        <div className="ui-card p-6">
+                            {avg !== null && listing.rating_count > 0 ? (
+                                <>
+                                    <p className="font-display text-5xl font-extrabold text-pine-950">{avg.toFixed(1)}</p>
+                                    <div className="mt-1.5"><Stars value={avg} size={20} /></div>
+                                    <p className="mt-1 text-sm text-ink-2">
+                                        Based on {listing.rating_count} review{listing.rating_count === 1 ? '' : 's'}
+                                    </p>
+
+                                    <ul className="mt-5 space-y-2">
+                                        {[5, 4, 3, 2, 1].map((n) => {
+                                            const count = ratingBreakdown[n] ?? 0;
+
+                                            return (
+                                                <li key={n} className="flex items-center gap-3 text-xs font-semibold text-ink-2">
+                                                    <span className="w-3 text-right">{n}</span>
+                                                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-mist-100">
+                                                        <div
+                                                            className="h-2 rounded-full bg-sun-500"
+                                                            style={{ width: `${totalReviews ? (count / totalReviews) * 100 : 0}%` }}
+                                                        />
+                                                    </div>
+                                                    <span className="w-5 text-ink-3">{count}</span>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                </>
+                            ) : (
+                                <div className="py-6 text-center">
+                                    <p className="font-display text-lg font-extrabold text-pine-950">No reviews yet</p>
+                                    <p className="mt-1 text-sm text-ink-2">
+                                        Reviews appear after a buyer completes an order for this listing.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="space-y-4">
+                            {reviews.map((review) => (
+                                <article key={review.id} className="ui-card p-5">
+                                    <div className="flex items-start gap-3.5">
+                                        <Avatar name={review.reviewer.name} url={review.reviewer.avatar_url} size={42} />
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                                <span className="text-sm font-bold text-ink">{review.reviewer.name}</span>
+                                                <span className="ui-chip bg-mist-100 text-pine-700">
+                                                    <BadgeCheck size={13} /> Verified purchase
+                                                </span>
+                                                <span className="text-xs text-ink-3">{timeAgo(review.created_at)}</span>
+                                            </div>
+                                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                                                <Stars value={review.product_rating} size={15} />
+                                                <span className="text-xs text-ink-3">
+                                                    Seller: {review.rating}/5
+                                                </span>
+                                            </div>
+
+                                            {review.comment && (
+                                                <p className="mt-3 whitespace-pre-line break-words text-[15px] leading-relaxed text-ink-2">
+                                                    {review.comment}
+                                                </p>
+                                            )}
+
+                                            {review.attachments.length > 0 && (
+                                                <div className="mt-3">
+                                                    <AttachmentGrid attachments={review.attachments} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </article>
+                            ))}
                         </div>
                     </div>
-                </Modal>
+                </section>
+
+                {sellerOtherListings.length > 0 && (
+                    <Row title={`More from ${listing.seller.name}`}>
+                        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+                            {sellerOtherListings.map((l) => <ListingCard key={l.id} listing={l} />)}
+                        </div>
+                    </Row>
+                )}
+
+                {similarListings.length > 0 && (
+                    <Row title={`More in ${listing.category.name}`}>
+                        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+                            {similarListings.slice(0, 8).map((l) => <ListingCard key={l.id} listing={l} />)}
+                        </div>
+                    </Row>
+                )}
+
+                {featuredListings.length > 0 && (
+                    <Row title="Trending on campus">
+                        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+                            {featuredListings.slice(0, 8).map((l) => <ListingCard key={l.id} listing={l} />)}
+                        </div>
+                        <div className="mt-6 text-center">
+                            <Link href="/marketplace" className="ui-btn ui-btn-outline">Keep browsing the marketplace</Link>
+                        </div>
+                    </Row>
+                )}
+            </Page>
+
+            {zoom && images.length > 0 && (
+                <Lightbox images={lightboxImages} start={active} onClose={() => setZoom(false)} />
+            )}
+
+            {dialog === 'order' && (
+                <ConfirmDialog
+                    tone="primary"
+                    title="Confirm your order"
+                    message={`You are ordering ${safeQty} × “${listing.title}” for ${formatPrice(total)}. The seller must confirm it, then you meet on campus and pay in person.`}
+                    confirmLabel="Place order"
+                    processing={busy}
+                    onConfirm={placeOrder}
+                    onClose={() => setDialog(null)}
+                />
+            )}
+
+            {dialog === 'delete' && (
+                <ConfirmDialog
+                    title="Delete this listing?"
+                    message="This permanently removes the listing and its photos. Listings with open orders cannot be deleted."
+                    confirmLabel="Delete listing"
+                    processing={busy}
+                    onConfirm={deleteListing}
+                    onClose={() => setDialog(null)}
+                />
             )}
 
             {reporting && (
@@ -656,10 +684,15 @@ export default function Show({
                     onClose={() => setReporting(false)}
                 />
             )}
+
+            {reviewing && reviewableOrder && (
+                <ReviewModal
+                    orderId={reviewableOrder.id}
+                    sellerName={listing.seller.name}
+                    listingTitle={listing.title}
+                    onClose={() => setReviewing(false)}
+                />
+            )}
         </AppLayout>
     );
-}
-
-function humanize(key: string) {
-    return key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 }

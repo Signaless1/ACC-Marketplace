@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests;
 
+use App\Support\PhilippinePhone;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 
 class RegisterRequest extends FormRequest
@@ -25,6 +27,10 @@ class RegisterRequest extends FormRequest
             'email' => is_string($this->email)
                 ? mb_strtolower(trim($this->email))
                 : $this->email,
+            // 0917 123 4567, +63 917 123 4567 and 639171234567 all become
+            // 09171234567. Anything that is not a PH mobile number is left
+            // as typed so validation can reject it.
+            'phone' => PhilippinePhone::normalize($this->phone) ?? $this->phone,
         ]);
     }
 
@@ -42,6 +48,31 @@ class RegisterRequest extends FormRequest
             'max:60',
             // Letters (any language), spaces, apostrophes, periods and hyphens.
             "regex:/^[\p{L}\p{M}][\p{L}\p{M}\s.'\-]*$/u",
+        ];
+    }
+
+    /**
+     * Shared by registration and the settings page. Expects the value to be
+     * normalised first (see PhilippinePhone::normalize).
+     *
+     * @return array<int, mixed>
+     */
+    public static function phoneRules(?int $ignoreUserId = null): array
+    {
+        return [
+            'string',
+            // Exactly 11 digits starting with 09: the only form we store.
+            'regex:'.PhilippinePhone::PATTERN,
+            Rule::unique('users', 'phone')->ignore($ignoreUserId),
+        ];
+    }
+
+    public static function phoneMessages(): array
+    {
+        return [
+            'phone.required' => 'Enter your mobile number.',
+            'phone.regex' => 'Enter a valid Philippine mobile number: 11 digits starting with 09 (like 09171234567), or +63 followed by 10 digits.',
+            'phone.unique' => 'That mobile number is already linked to another account.',
         ];
     }
 
@@ -65,6 +96,7 @@ class RegisterRequest extends FormRequest
                 'max:254',
                 'unique:users,email',
             ],
+            'phone' => ['required', ...self::phoneRules()],
             'password' => ['required', 'string', 'confirmed', self::passwordRule()],
         ];
     }
@@ -72,6 +104,7 @@ class RegisterRequest extends FormRequest
     public function messages(): array
     {
         return [
+            ...self::phoneMessages(),
             'name.regex' => 'Your name can only contain letters, spaces, apostrophes, periods and hyphens.',
             'name.min' => 'Please enter your full name.',
             'name.max' => 'Your name must be 60 characters or fewer.',

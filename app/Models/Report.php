@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\AutoSuspension;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -18,32 +19,43 @@ class Report extends Model
         'other' => 'Other',
     ];
 
-    /** Extra reasons that only make sense for a specific transaction. */
+    /** Reasons offered when reporting a transaction (an order). */
     public const TRANSACTION_REASONS = [
-        'not_as_described' => 'Item or service not as described',
-        'non_delivery' => 'Item not handed over / service not delivered',
+        'item_not_received' => 'Item or service was not received',
+        'not_as_described' => 'Not as described',
+        'no_show' => 'Other party did not show up',
         'payment_issue' => 'Payment problem',
-        'no_show' => 'Seller or buyer did not show up',
-        'fraud' => 'Suspected fraud or scam',
-        'harassment' => 'Harassment or abusive behavior',
+        'fraud' => 'Suspected scam or fraud',
+        'harassment' => 'Harassment or threats',
         'other' => 'Other',
     ];
 
-    public const AUTHORITIES = [
-        'Student Affairs Office',
-        'Guidance Office',
-        'Dean\'s Office',
-        'Campus Security',
-        'School Administrator',
-    ];
+    public const STATUSES = ['pending', 'reviewing', 'escalated', 'resolved', 'dismissed'];
 
-    public const STATUSES = ['pending', 'reviewing', 'resolved', 'dismissed'];
+    /**
+     * Every reason label, regardless of report type.
+     *
+     * @return array<string, string>
+     */
+    public static function allReasons(): array
+    {
+        return self::REASONS + self::TRANSACTION_REASONS;
+    }
+
+    protected static function booted(): void
+    {
+        // Every new report re-checks the reported user against the
+        // auto-suspension threshold.
+        static::created(function (Report $report) {
+            AutoSuspension::check($report->reportedUser);
+        });
+    }
 
     protected $fillable = [
         'reporter_id',
         'listing_id',
-        'reported_user_id',
         'order_id',
+        'reported_user_id',
         'reason',
         'description',
         'status',
@@ -51,7 +63,6 @@ class Report extends Model
         'reviewed_by',
         'reviewed_at',
         'escalated_to',
-        'escalation_note',
         'escalated_at',
     ];
 
@@ -76,12 +87,6 @@ class Report extends Model
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
-    }
-
-    /** Every reason label, for both listing and transaction reports. */
-    public static function allReasons(): array
-    {
-        return array_merge(self::REASONS, self::TRANSACTION_REASONS);
     }
 
     public function reportedUser(): BelongsTo

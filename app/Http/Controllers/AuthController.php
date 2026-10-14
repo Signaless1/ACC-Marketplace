@@ -18,6 +18,7 @@ class AuthController extends Controller
         $user = User::create([
             'name' => $validated['name'],
             'email' => $validated['email'],
+            'phone' => $validated['phone'],
             // The model's "hashed" cast hashes this on save.
             'password' => $validated['password'],
         ]);
