@@ -1,414 +1,526 @@
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import {
-    AlertCircle,
+    ArrowDown,
     ArrowLeft,
-    Check,
     CheckCheck,
-    ExternalLink,
-    MessageCircle,
+    Ban,
+    Flag,
+    MoreVertical,
+    Package,
+    Receipt,
     Send,
-    Tag,
+    ShieldAlert,
 } from 'lucide-react';
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
-import AttachmentList from '../../components/ui/AttachmentList';
 import Avatar from '../../components/ui/Avatar';
-import FilePicker, { FilePreviews } from '../../components/ui/FilePicker';
-import ImagePlaceholder from '../../components/ui/ImagePlaceholder';
-import { getJson, postForm, ValidationError } from '../../lib/http';
-import { AttachmentData, formatDateTime, formatPrice } from '../../types/shared';
+import {
+    AttachButton,
+    AttachmentGrid,
+    CHAT_ACCEPT,
+    FilePreviews,
+    useFilePicker,
+} from '../../components/ui/Attachments';
+import DeleteMessageModal from '../../components/ui/DeleteMessageModal';
+import ReportModal from '../../components/ui/ReportModal';
+import StatusBadge from '../../components/ui/StatusBadge';
+import { useLiveReload } from '../../lib/live';
+import { Attachment, formatDate, formatPrice } from '../../types/shared';
 
-interface UserData {
+interface Person {
     id: number;
     name: string;
-    avatar_url?: string | null;
+    avatar_url: string | null;
 }
 
-interface Message {
+interface Msg {
     id: number;
-    body: string;
     sender_id: number;
+    body: string | null;
     read_at: string | null;
     created_at: string;
-    sender?: UserData;
-    attachments?: AttachmentData[];
-}
-
-interface Conversation {
-    id: number;
-    listing: {
-        id: number;
-        title: string;
-        price: number;
-        status: 'available' | 'reserved' | 'sold';
-        category: { id: number; name: string };
-        images: { id: number; path: string }[];
-    };
-    buyer: UserData;
-    seller: UserData;
-    messages: Message[];
+    /** True once the sender deleted it for everyone; body and attachments are then empty. */
+    is_deleted: boolean;
+    sender: Person;
+    attachments: Attachment[];
 }
 
 interface Props {
-    conversation: Conversation;
+    conversation: {
+        id: number;
+        buyer_id: number;
+        seller_id: number;
+        buyer: Person;
+        seller: Person;
+        listing: {
+            id: number;
+            title: string;
+            price: string;
+            status: string;
+            images: { id: number; path: string }[];
+        };
+        messages: Msg[];
+    };
     currentUserId: number;
-    limits: { max_files: number; max_megabytes: number; extensions: string[] };
+    order: { id: number; status: string; quantity: number; price: string } | null;
 }
 
-const POLL_MS = 2500;
+const USER_REPORT_REASONS: Record<string, string> = {
+    scam: 'Scam or fraud',
+    spam: 'Spam',
+    harassment: 'Harassment or abusive behavior',
+    inappropriate: 'Inappropriate content',
+    other: 'Other',
+};
 
-export default function Show({ conversation, currentUserId, limits }: Props) {
-    const [messages, setMessages] = useState<Message[]>(conversation.messages);
-    const [readIds, setReadIds] = useState<Set<number>>(
-        () => new Set(conversation.messages.filter((m) => m.read_at).map((m) => m.id)),
-    );
+const clock = (iso: string) =>
+    new Date(iso).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+
+function dayLabel(iso: string) {
+    const date = new Date(iso);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+
+    return formatDate(iso);
+}
+
+export default function Show({ conversation, currentUserId, order }: Props) {
+    const other = conversation.buyer_id === currentUserId ? conversation.seller : conversation.buyer;
+    const { listing, messages } = conversation;
+
     const [body, setBody] = useState('');
-    const [files, setFiles] = useState<File[]>([]);
     const [sending, setSending] = useState(false);
-    const [error, setError] = useState('');
+    const [errors, setErrors] = useState<Record<string, string>>({});
+    const [reporting, setReporting] = useState(false);
+    const [showJump, setShowJump] = useState(false);
+    const [deleting, setDeleting] = useState<Msg | null>(null);
+    const [deleteBusy, setDeleteBusy] = useState(false);
 
+    const picker = useFilePicker(5, 'chat');
     const scroller = useRef<HTMLDivElement>(null);
+    const thread = useRef<HTMLUListElement>(null);
     const stickToBottom = useRef(true);
-    const lastId = useRef(conversation.messages.at(-1)?.id ?? 0);
+    const lastCount = useRef(messages.length);
 
-    const otherUser = conversation.buyer.id === currentUserId ? conversation.seller : conversation.buyer;
-    const listing = conversation.listing;
-    const cover = listing.images[0];
+    // New messages from the other person arrive without a refresh.
+    useLiveReload(['conversation'], 3000);
 
-    lastId.current = messages.at(-1)?.id ?? 0;
+    const scrollToBottom = (smooth = false) => {
+        const el = scroller.current;
+        if (!el) return;
+        el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    };
 
-    const merge = useCallback((incoming: Message[]) => {
-        if (incoming.length === 0) return;
-
-        setMessages((current) => {
-            const known = new Set(current.map((m) => m.id));
-            const fresh = incoming.filter((m) => !known.has(m.id));
-
-            return fresh.length ? [...current, ...fresh] : current;
-        });
+    // Start at the newest message.
+    useLayoutEffect(() => {
+        scrollToBottom();
     }, []);
 
-    // Background refresh: new messages + read receipts, no page reload.
+    // Photos and videos load after the first paint and make the thread taller.
+    // While the reader is at the bottom, keep them pinned to the newest message.
     useEffect(() => {
-        let stopped = false;
-        const controller = new AbortController();
+        const list = thread.current;
+        if (!list || typeof ResizeObserver === 'undefined') return;
 
-        const tick = async () => {
-            if (stopped || document.hidden) return;
+        const observer = new ResizeObserver(() => {
+            if (stickToBottom.current) scrollToBottom();
+        });
+        observer.observe(list);
 
-            try {
-                const data = await getJson<{ messages: Message[]; read_ids: number[] }>(
-                    `/messages/${conversation.id}/poll?after=${lastId.current}`,
-                    controller.signal,
-                );
+        return () => observer.disconnect();
+    }, []);
 
-                if (stopped) return;
+    // When messages change: follow along only if the reader is already at the bottom.
+    useEffect(() => {
+        const added = messages.length > lastCount.current;
+        lastCount.current = messages.length;
 
-                merge(data.messages);
-                setReadIds((current) => {
-                    const next = new Set(current);
-                    data.read_ids.forEach((id) => next.add(id));
+        if (!added) return;
 
-                    return next.size === current.size ? current : next;
-                });
-            } catch {
-                // Temporary network problem; the next tick retries.
-            }
-        };
+        const last = messages[messages.length - 1];
 
-        const timer = window.setInterval(tick, POLL_MS);
-        const onVisible = () => !document.hidden && void tick();
-        document.addEventListener('visibilitychange', onVisible);
-
-        return () => {
-            stopped = true;
-            controller.abort();
-            window.clearInterval(timer);
-            document.removeEventListener('visibilitychange', onVisible);
-        };
-    }, [conversation.id, merge]);
-
-    // Keep the view pinned to the newest message unless the reader scrolled up.
-    useLayoutEffect(() => {
-        const el = scroller.current;
-        if (el && stickToBottom.current) {
-            el.scrollTop = el.scrollHeight;
+        if (stickToBottom.current || last.sender_id === currentUserId) {
+            scrollToBottom(true);
+        } else {
+            setShowJump(true);
         }
     }, [messages.length]);
 
     const onScroll = () => {
         const el = scroller.current;
-        if (el) {
-            stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        }
+        if (!el) return;
+
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        stickToBottom.current = nearBottom;
+        if (nearBottom) setShowJump(false);
     };
 
-    const send = async (event?: FormEvent) => {
+    const canSend = (body.trim().length > 0 || picker.files.length > 0) && !sending;
+
+    const send = (event?: FormEvent) => {
         event?.preventDefault();
+        if (!canSend) return;
 
-        if (sending || (!body.trim() && files.length === 0)) return;
-
-        const form = new FormData();
-        form.append('body', body);
-        files.forEach((file) => form.append('attachments[]', file));
-
-        setSending(true);
-        setError('');
-
-        try {
-            const data = await postForm<{ message: Message }>(`/messages/${conversation.id}`, form);
-
-            stickToBottom.current = true;
-            merge([data.message]);
-            setBody('');
-            setFiles([]);
-        } catch (e) {
-            setError(e instanceof ValidationError || e instanceof Error ? e.message : 'Could not send.');
-        } finally {
-            setSending(false);
-        }
+        router.post(
+            `/messages/${conversation.id}`,
+            { body: body.trim(), attachments: picker.files },
+            {
+                forceFormData: true,
+                preserveScroll: true,
+                onStart: () => {
+                    setSending(true);
+                    setErrors({});
+                },
+                onFinish: () => setSending(false),
+                onError: (e) => setErrors(e),
+                onSuccess: () => {
+                    setBody('');
+                    picker.clear();
+                    stickToBottom.current = true;
+                },
+            },
+        );
     };
 
     const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
-            void send();
+            send();
         }
     };
 
+    const deleteMessage = (message: Msg, scope: 'me' | 'everyone') => {
+        router.delete(`/messages/${conversation.id}/${message.id}`, {
+            data: { scope },
+            preserveScroll: true,
+            onStart: () => setDeleteBusy(true),
+            onFinish: () => {
+                setDeleteBusy(false);
+                setDeleting(null);
+            },
+        });
+    };
+
+    const describe = (message: Msg) => {
+        if (message.is_deleted) {
+            return message.sender_id === currentUserId
+                ? 'You deleted this message'
+                : 'This message was deleted';
+        }
+
+        if (message.body) return message.body;
+
+        const n = message.attachments.length;
+        return n === 1 ? '1 attachment' : `${n} attachments`;
+    };
+
+    const attachmentError =
+        picker.problem ?? Object.entries(errors).find(([key]) => key.startsWith('attachments'))?.[1];
+
+    // Index of the last message I sent, for the "Seen" marker.
+    const lastMineIndex = [...messages].map((m) => m.sender_id).lastIndexOf(currentUserId);
+
     return (
         <AppLayout>
-            <Head title={`Chat with ${otherUser.name}`} />
+            <Head title={`Chat with ${other.name}`} />
 
-            <div className="mx-auto max-w-6xl">
-                <Link
-                    href="/messages"
-                    className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-[#34483e] transition hover:text-[#176B4D]"
-                >
-                    <ArrowLeft size={18} />
-                    Back to Messages
-                </Link>
+            <div className="mx-auto flex h-[calc(100vh-72px)] max-w-5xl flex-col px-0 sm:px-6 sm:py-5 lg:px-8">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white sm:rounded-3xl sm:border sm:border-mist-200 sm:shadow-[var(--shadow-card)]">
+                    {/* Header */}
+                    <div className="shrink-0 border-b border-mist-100 px-4 py-3 sm:px-5">
+                        <div className="flex items-center gap-3">
+                            <Link
+                                href="/messages"
+                                aria-label="Back to messages"
+                                className="rounded-lg p-2 text-ink-2 transition hover:bg-mist-100 hover:text-pine-800"
+                            >
+                                <ArrowLeft size={20} />
+                            </Link>
 
-                <div className="surface-card grid h-[calc(100vh-190px)] min-h-[520px] overflow-hidden lg:grid-cols-[320px_1fr]">
-                    {/* Listing side panel */}
-                    <aside className="hidden overflow-y-auto border-r border-[#E7EEE9] bg-[#FBFDFC] lg:block">
-                        <div className="p-5">
-                            <p className="mb-3 text-xs font-bold uppercase tracking-wider text-[#566860]">
-                                About this listing
-                            </p>
+                            <Link href={`/users/${other.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+                                <Avatar name={other.name} url={other.avatar_url} size={42} />
+                                <span className="min-w-0 leading-tight">
+                                    <span className="block truncate font-display text-base font-extrabold text-pine-950">
+                                        {other.name}
+                                    </span>
+                                    <span className="block text-xs text-ink-3">
+                                        {conversation.buyer_id === currentUserId ? 'Seller' : 'Buyer'}
+                                    </span>
+                                </span>
+                            </Link>
 
+                            <div className="flex shrink-0 items-center gap-1.5">
+                                {order && (
+                                    <Link
+                                        href={`/orders/${order.id}/report`}
+                                        className="ui-btn ui-btn-ghost ui-btn-sm !px-2.5 sm:!px-3.5"
+                                        title="Compile this transaction and report a problem"
+                                        aria-label="Report transaction"
+                                    >
+                                        <Receipt size={16} />
+                                        <span className="hidden sm:inline">Report transaction</span>
+                                    </Link>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => setReporting(true)}
+                                    aria-label={`Report ${other.name}`}
+                                    title={`Report ${other.name}`}
+                                    className="rounded-lg p-2 text-ink-3 transition hover:bg-red-50 hover:text-red-700"
+                                >
+                                    <Flag size={18} />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* The item being discussed */}
+                        <div className="mt-3 flex items-center gap-3 rounded-2xl bg-mist-50 p-2.5 ring-1 ring-mist-200">
                             <Link
                                 href={`/listings/${listing.id}`}
-                                className="group block overflow-hidden rounded-2xl border border-[#E1E9E4] bg-white transition hover:border-[#BFD8CA] hover:shadow-md"
+                                className="h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-mist-100"
                             >
-                                <div className="aspect-[4/3] overflow-hidden bg-[#EEF4F0]">
-                                    {cover ? (
-                                        <img
-                                            src={`/storage/${cover.path}`}
-                                            alt={listing.title}
-                                            className="h-full w-full object-cover transition group-hover:scale-105"
-                                        />
-                                    ) : (
-                                        <ImagePlaceholder />
-                                    )}
-                                </div>
-
-                                <div className="p-4">
-                                    <h3 className="line-clamp-2 text-sm font-bold text-[#12291f] group-hover:text-[#176B4D]">
-                                        {listing.title}
-                                    </h3>
-                                    <p className="mt-2 text-lg font-bold text-[#176B4D]">{formatPrice(listing.price)}</p>
-                                    <div className="mt-3 flex items-center justify-between text-xs text-[#43554c]">
-                                        <span className="inline-flex items-center gap-1.5">
-                                            <Tag size={13} />
-                                            {listing.category.name}
-                                        </span>
-                                        <span className="rounded-full bg-[#EAF4EF] px-2 py-0.5 font-semibold capitalize text-[#12583F]">
-                                            {listing.status}
-                                        </span>
-                                    </div>
-                                </div>
+                                {listing.images[0] ? (
+                                    <img
+                                        src={`/storage/${listing.images[0].path}`}
+                                        alt={listing.title}
+                                        className="h-full w-full object-cover"
+                                    />
+                                ) : (
+                                    <span className="flex h-full items-center justify-center text-mist-300">
+                                        <Package size={24} />
+                                    </span>
+                                )}
                             </Link>
-                        </div>
-                    </aside>
-
-                    {/* Chat */}
-                    <section className="flex min-h-0 flex-col">
-                        <header className="flex items-center gap-3 border-b border-[#E7EEE9] bg-white px-5 py-3.5">
-                            <Avatar name={otherUser.name} url={otherUser.avatar_url} size={42} />
 
                             <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                    <h1 className="truncate font-sans text-base font-bold text-[#12291f]">
-                                        {otherUser.name}
-                                    </h1>
-                                    <span className="rounded-full bg-[#EAF4EF] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#12583F]">
-                                        {conversation.seller.id === currentUserId ? 'Buyer' : 'Seller'}
-                                    </span>
-                                </div>
-                                <p className="truncate text-xs text-[#43554c]">{listing.title}</p>
+                                <Link
+                                    href={`/listings/${listing.id}`}
+                                    className="block truncate text-sm font-bold text-ink hover:text-pine-700"
+                                >
+                                    {listing.title}
+                                </Link>
+                                <p className="font-display text-base font-extrabold text-pine-900">
+                                    {formatPrice(listing.price)}
+                                </p>
                             </div>
 
-                            <Link
-                                href={`/listings/${listing.id}`}
-                                className="flex items-center gap-2 rounded-xl border border-[#dce6e0] px-3 py-2 text-xs font-semibold text-[#34483e] transition hover:border-[#BFD8CA] hover:text-[#176B4D] lg:hidden"
-                            >
-                                <ExternalLink size={14} />
-                                Listing
-                            </Link>
-                        </header>
-
-                        <div
-                            ref={scroller}
-                            onScroll={onScroll}
-                            className="min-h-0 flex-1 overflow-y-auto bg-[#F3F7F4] px-4 py-5 sm:px-6"
-                        >
-                            {messages.length === 0 ? (
-                                <div className="flex h-full items-center justify-center">
-                                    <div className="max-w-sm text-center">
-                                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-white text-[#176B4D] shadow-sm">
-                                            <MessageCircle size={28} />
-                                        </div>
-                                        <h2 className="mt-5 font-sans text-lg font-bold text-[#12291f]">
-                                            Start a conversation
-                                        </h2>
-                                        <p className="mt-2 text-sm leading-6 text-[#43554c]">
-                                            Ask about availability, condition or price. You can attach photos,
-                                            videos and files too.
-                                        </p>
-                                    </div>
-                                </div>
+                            {order ? (
+                                <Link href="/orders" className="flex flex-col items-end gap-1">
+                                    <StatusBadge status={order.status} label={`Order ${order.status}`} />
+                                    <span className="text-[11px] font-semibold text-pine-700 underline underline-offset-2">
+                                        View order
+                                    </span>
+                                </Link>
                             ) : (
-                                <div className="mx-auto max-w-3xl space-y-2">
-                                    {messages.map((message, index) => {
-                                        const mine = message.sender_id === currentUserId;
-                                        const previous = messages[index - 1];
-                                        const grouped = previous?.sender_id === message.sender_id;
-                                        const sender = mine ? null : (message.sender ?? otherUser);
-
-                                        return (
-                                            <div
-                                                key={message.id}
-                                                className={`msg-in flex ${mine ? 'justify-end' : 'justify-start'} ${
-                                                    grouped ? '' : 'pt-2'
-                                                }`}
-                                            >
-                                                <div
-                                                    className={`flex max-w-[88%] items-end gap-2 sm:max-w-[72%] ${
-                                                        mine ? 'flex-row-reverse' : ''
-                                                    }`}
-                                                >
-                                                    {!mine &&
-                                                        (grouped ? (
-                                                            <span className="w-8 shrink-0" />
-                                                        ) : (
-                                                            <Avatar
-                                                                name={sender!.name}
-                                                                url={sender!.avatar_url}
-                                                                size={32}
-                                                            />
-                                                        ))}
-
-                                                    <div
-                                                        className={`min-w-0 rounded-2xl px-4 py-2.5 shadow-sm ${
-                                                            mine
-                                                                ? 'rounded-br-md bg-[#176B4D] text-white'
-                                                                : 'rounded-bl-md border border-[#E1E9E4] bg-white text-[#12291f]'
-                                                        }`}
-                                                    >
-                                                        {message.body && (
-                                                            <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                                                                {message.body}
-                                                            </p>
-                                                        )}
-
-                                                        <AttachmentList
-                                                            attachments={message.attachments ?? []}
-                                                            tone={mine ? 'dark' : 'light'}
-                                                        />
-
-                                                        <div
-                                                            className={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
-                                                                mine ? 'text-white/85' : 'text-[#566860]'
-                                                            }`}
-                                                        >
-                                                            <span>{formatDateTime(message.created_at)}</span>
-                                                            {mine &&
-                                                                (message.read_at || readIds.has(message.id) ? (
-                                                                    <CheckCheck size={13} aria-label="Read" />
-                                                                ) : (
-                                                                    <Check size={13} aria-label="Sent" />
-                                                                ))}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
+                                <StatusBadge status={listing.status} />
                             )}
                         </div>
+                    </div>
 
-                        <form onSubmit={send} className="border-t border-[#E7EEE9] bg-white p-3 sm:p-4">
-                            <div className="mx-auto max-w-3xl space-y-2">
-                                {files.length > 0 && <FilePreviews files={files} onChange={setFiles} />}
+                    {/* Thread */}
+                    <div
+                        ref={scroller}
+                        onScroll={onScroll}
+                        className="thin-scroll relative min-h-0 flex-1 overflow-y-auto bg-mist-50 px-4 py-5 sm:px-6"
+                    >
+                        <p className="mx-auto mb-5 flex max-w-md items-start gap-2 rounded-xl bg-white px-4 py-3 text-xs leading-relaxed text-ink-2 ring-1 ring-mist-200">
+                            <ShieldAlert size={16} className="mt-0.5 shrink-0 text-sun-700" />
+                            Keep the deal inside ACC Marketplace. Meet on campus during the day and never share
+                            passwords or one-time codes.
+                        </p>
 
-                                <div
-                                    className={`flex items-end gap-1 rounded-2xl border bg-[#FAFCFB] p-1.5 transition ${
-                                        error
-                                            ? 'border-red-300'
-                                            : 'border-[#cfdcd4] focus-within:border-[#176B4D] focus-within:ring-2 focus-within:ring-[#176B4D]/15'
-                                    }`}
-                                >
-                                    <FilePicker
-                                        files={files}
-                                        onChange={setFiles}
-                                        max={limits.max_files}
-                                        maxMegabytes={limits.max_megabytes}
-                                        accept={limits.extensions.map((e) => `.${e}`).join(',')}
-                                        label="Attach photos, videos or files"
-                                        onReject={setError}
-                                    />
+                        {messages.length === 0 && (
+                            <p className="py-12 text-center text-sm text-ink-2">
+                                No messages yet. Say hello and ask about the item.
+                            </p>
+                        )}
 
-                                    <textarea
-                                        value={body}
-                                        onChange={(e) => setBody(e.target.value)}
-                                        onKeyDown={onKeyDown}
-                                        rows={1}
-                                        maxLength={5000}
-                                        placeholder="Write a message…"
-                                        aria-label="Message"
-                                        className="max-h-32 min-h-[44px] min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-sm text-[#12291f] outline-none"
-                                    />
+                        <ul ref={thread} className="space-y-1.5">
+                            {messages.map((message, index) => {
+                                const mine = message.sender_id === currentUserId;
+                                const previous = messages[index - 1];
+                                const newDay =
+                                    !previous ||
+                                    new Date(previous.created_at).toDateString() !==
+                                        new Date(message.created_at).toDateString();
+                                const firstOfRun = !previous || previous.sender_id !== message.sender_id || newDay;
 
-                                    <button
-                                        type="submit"
-                                        disabled={sending || (!body.trim() && files.length === 0)}
-                                        aria-label="Send message"
-                                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#176B4D] text-white transition hover:bg-[#12583F] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-                                    >
-                                        <Send size={18} className={sending ? 'animate-pulse' : ''} />
-                                    </button>
-                                </div>
+                                return (
+                                    <li key={message.id}>
+                                        {newDay && (
+                                            <div className="my-4 flex justify-center">
+                                                <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-ink-3 ring-1 ring-mist-200">
+                                                    {dayLabel(message.created_at)}
+                                                </span>
+                                            </div>
+                                        )}
 
-                                <div className="flex items-center justify-between px-1 text-[11px] text-[#566860]">
-                                    {error ? (
-                                        <p role="alert" className="flex items-center gap-1 font-semibold text-red-600">
-                                            <AlertCircle size={13} />
-                                            {error}
-                                        </p>
-                                    ) : (
-                                        <p>
-                                            Enter to send · Shift+Enter for a new line · up to {limits.max_files} files,{' '}
-                                            {limits.max_megabytes} MB each
-                                        </p>
-                                    )}
-                                </div>
+                                        <div className={`flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'} ${firstOfRun ? 'mt-3' : ''}`}>
+                                            {!mine && (
+                                                <span className="w-8 shrink-0">
+                                                    {firstOfRun && (
+                                                        <Avatar name={message.sender.name} url={message.sender.avatar_url} size={32} />
+                                                    )}
+                                                </span>
+                                            )}
+
+                                            <div
+                                                className={`group flex max-w-[86%] items-end gap-1 sm:max-w-[74%] ${
+                                                    mine ? 'flex-row-reverse' : 'flex-row'
+                                                }`}
+                                            >
+                                                <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                                                <div
+                                                    className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm ${
+                                                        message.is_deleted
+                                                            ? 'border border-dashed border-mist-300 bg-transparent text-ink-3 shadow-none'
+                                                            : mine
+                                                              ? 'rounded-br-md bg-pine-800 text-white'
+                                                              : 'rounded-bl-md bg-white text-ink ring-1 ring-mist-200'
+                                                    }`}
+                                                >
+                                                    {message.is_deleted ? (
+                                                        <p className="flex items-center gap-1.5 text-sm italic">
+                                                            <Ban size={14} className="shrink-0" />
+                                                            {describe(message)}
+                                                        </p>
+                                                    ) : (
+                                                        <>
+                                                            {message.body && (
+                                                                <p className="whitespace-pre-wrap break-words">{message.body}</p>
+                                                            )}
+
+                                                            {message.attachments.length > 0 && (
+                                                                <div className={message.body ? 'mt-2.5' : ''}>
+                                                                    <AttachmentGrid
+                                                                        attachments={message.attachments}
+                                                                        tone={mine ? 'dark' : 'light'}
+                                                                    />
+                                                                </div>
+                                                            )}
+                                                        </>
+                                                    )}
+                                                </div>
+
+                                                <span className="mt-1 flex items-center gap-1 px-1 text-[11px] text-ink-3">
+                                                    {clock(message.created_at)}
+                                                    {mine && !message.is_deleted && index === lastMineIndex && message.read_at && (
+                                                        <span className="inline-flex items-center gap-0.5 font-semibold text-pine-700">
+                                                            <CheckCheck size={13} /> Seen
+                                                        </span>
+                                                    )}
+                                                </span>
+                                                </div>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setDeleting(message)}
+                                                    aria-label="Delete message"
+                                                    title="Delete message"
+                                                    className="mb-6 shrink-0 rounded-full p-1.5 text-ink-3 transition hover:bg-mist-200 hover:text-ink focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                                                >
+                                                    <MoreVertical size={16} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    </div>
+
+                    {showJump && (
+                        <div className="relative">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    scrollToBottom(true);
+                                    setShowJump(false);
+                                }}
+                                className="ui-pop absolute -top-14 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-pine-800 px-4 py-2 text-xs font-bold text-white shadow-lg"
+                            >
+                                <ArrowDown size={14} /> New messages
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Composer */}
+                    <form onSubmit={send} className="shrink-0 border-t border-mist-100 bg-white p-3 sm:p-4">
+                        {picker.files.length > 0 && (
+                            <div className="mb-3">
+                                <FilePreviews files={picker.files} onRemove={picker.remove} />
                             </div>
-                        </form>
-                    </section>
+                        )}
+
+                        {(attachmentError || errors.body) && (
+                            <p className="ui-error mb-2 !mt-0" role="alert">
+                                {attachmentError ?? errors.body}
+                            </p>
+                        )}
+
+                        <div className="flex items-end gap-2">
+                            <AttachButton
+                                accept={CHAT_ACCEPT}
+                                onPick={picker.add}
+                                label="Attach photos, videos or files"
+                                disabled={sending}
+                            />
+
+                            <textarea
+                                value={body}
+                                onChange={(e) => setBody(e.target.value)}
+                                onKeyDown={onKeyDown}
+                                rows={1}
+                                maxLength={5000}
+                                placeholder="Write a message…"
+                                aria-label="Message"
+                                className="ui-input max-h-36 min-h-11 flex-1 resize-none !rounded-2xl !py-2.5"
+                                style={{ height: 'auto' }}
+                                onInput={(e) => {
+                                    const el = e.currentTarget;
+                                    el.style.height = 'auto';
+                                    el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+                                }}
+                            />
+
+                            <button
+                                type="submit"
+                                disabled={!canSend}
+                                aria-label="Send message"
+                                className="ui-btn ui-btn-primary !h-11 !w-11 shrink-0 !rounded-2xl !px-0"
+                            >
+                                <Send size={18} />
+                            </button>
+                        </div>
+                        <p className="mt-1.5 hidden px-1 text-[11px] text-ink-3 sm:block">
+                            Enter to send · Shift + Enter for a new line · up to 5 files, 25 MB each
+                        </p>
+                    </form>
                 </div>
             </div>
+
+            {deleting && (
+                <DeleteMessageModal
+                    preview={describe(deleting)}
+                    canDeleteForEveryone={deleting.sender_id === currentUserId && !deleting.is_deleted}
+                    processing={deleteBusy}
+                    onDelete={(scope) => deleteMessage(deleting, scope)}
+                    onClose={() => setDeleting(null)}
+                />
+            )}
+
+            {reporting && (
+                <ReportModal
+                    action={`/users/${other.id}/report`}
+                    title={`Report ${other.name}`}
+                    reasons={USER_REPORT_REASONS}
+                    onClose={() => setReporting(false)}
+                />
+            )}
         </AppLayout>
     );
 }

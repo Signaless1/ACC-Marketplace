@@ -19,9 +19,18 @@
   --color-sun-400: #f2c14e;
   --color-sun-500: #e8a920;
   --color-sun-600: #bf8410;
+  --color-sun-700: #8a5e05;
+  --color-sun-800: #6b4a00;
   --color-mist-50: #f5f9f6;
   --color-mist-100: #e8f1ea;
   --color-mist-200: #d3e3d8;
+  --color-mist-300: #b7cfbf;
+  /* Text colours that stay readable (>= 4.5:1) on white and on mist-50. */
+  --color-ink: #0b2a1f;
+  --color-ink-2: #3d5c4f;
+  --color-ink-3: #4f6b5f;
+  --shadow-card: 0 1px 2px rgba(6, 42, 29, 0.05), 0 4px 16px rgba(6, 42, 29, 0.04);
+  --shadow-lift: 0 2px 4px rgba(6, 42, 29, 0.06), 0 12px 32px rgba(6, 42, 29, 0.10);
   --font-display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
   --font-body: 'Figtree', 'Segoe UI', system-ui, sans-serif;
 }
@@ -67,22 +76,28 @@
 @layer base {
   body {
     margin: 0;
-    font-family: 'Inter', -apple-system, sans-serif;
-    color: var(--ink);
-    background: var(--cream);
+    font-family: var(--font-body);
+    color: var(--color-ink);
+    background: var(--color-mist-50);
     line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
 
-  h1, h2, h3 {
-    font-family: 'Fraunces', Georgia, serif;
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
     margin: 0;
-    color: var(--forest-900);
+    color: var(--color-pine-950);
     letter-spacing: -0.01em;
   }
 
   p { margin: 0; }
 
   a { text-decoration: none; color: inherit; }
+
+  button:not(:disabled),
+  [role='button']:not(:disabled) { cursor: pointer; }
+
+  :focus-visible { outline-offset: 2px; }
 }
 
 .section-inner {
@@ -1659,4 +1674,179 @@ html { scroll-behavior: smooth; }
 .site button:focus-visible {
   outline: 3px solid var(--color-sun-500);
   outline-offset: 3px;
+}
+
+
+/* =========================================================
+   Shared interior components (dashboard, forms, cards)
+   Utilities such as `h-9` or `w-full` can still override these.
+========================================================= */
+@layer components {
+  .ui-card {
+    @apply rounded-2xl border border-mist-200 bg-white;
+    box-shadow: var(--shadow-card);
+  }
+
+  .ui-btn {
+    @apply inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-bold whitespace-nowrap transition focus-visible:outline-none focus-visible:ring-4 disabled:cursor-not-allowed disabled:opacity-55;
+    font-family: var(--font-display);
+  }
+  .ui-btn-sm { @apply h-9 rounded-lg px-3.5 text-[13px]; }
+  .ui-btn-lg { @apply h-12 px-6 text-[15px]; }
+  .ui-btn-primary { @apply bg-pine-800 text-white hover:bg-pine-900 focus-visible:ring-pine-700/30; }
+  .ui-btn-gold { @apply bg-sun-400 text-pine-950 hover:bg-sun-500 focus-visible:ring-sun-400/40; }
+  .ui-btn-outline { @apply border-2 border-pine-900/20 bg-white text-pine-900 hover:border-pine-800 hover:bg-mist-50 focus-visible:ring-pine-700/20; }
+  .ui-btn-ghost { @apply text-pine-800 hover:bg-mist-100 focus-visible:ring-pine-700/20; }
+  .ui-btn-danger { @apply bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-500/30; }
+  .ui-btn-danger-outline { @apply border-2 border-red-200 bg-white text-red-700 hover:border-red-400 hover:bg-red-50 focus-visible:ring-red-500/20; }
+
+  .ui-input {
+    @apply h-11 w-full rounded-xl border border-pine-900/20 bg-white px-3.5 text-[15px] text-ink outline-none transition placeholder:text-ink-3 focus:border-pine-700 focus:ring-4 focus:ring-pine-700/15 disabled:bg-mist-50 disabled:text-ink-3;
+  }
+  textarea.ui-input { @apply h-auto py-2.5 leading-relaxed; }
+  .ui-input-error { @apply border-red-500 focus:border-red-500 focus:ring-red-500/15; }
+
+  .ui-label { @apply mb-1.5 block text-sm font-semibold text-ink; }
+  .ui-hint { @apply mt-1.5 text-[13px] text-ink-3; }
+  .ui-error { @apply mt-1.5 text-[13px] font-medium text-red-600; }
+
+  .ui-chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold; }
+}
+
+@keyframes ui-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ui-pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes ui-slide-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+
+.ui-fade { animation: ui-fade 0.2s ease both; }
+.ui-pop { animation: ui-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.ui-slide-in { animation: ui-slide-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-fade, .ui-pop, .ui-slide-in { animation: none; }
+}
+
+/* Slim scrollbars inside the sidebar and chat. */
+.thin-scroll { scrollbar-width: thin; scrollbar-color: rgba(120, 150, 135, 0.45) transparent; }
+.thin-scroll-light { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.28) transparent; }
+
+/* Print: the transaction report should print as a clean document. */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+  .print-page { box-shadow: none !important; border: 0 !important; }
+}
+
+/* =========================================================
+   Landing page (pages/Home.tsx): motion and effects.
+   Calm, mostly one-time slides. Everything is off for
+   prefers-reduced-motion, and nothing is hidden without JS.
+========================================================= */
+:root { --ease: cubic-bezier(0.22, 1, 0.36, 1); }
+
+@keyframes hx-up { from { transform: translateY(110%); } to { transform: none; } }
+@keyframes hx-drop { from { transform: translateY(-100%); } to { transform: none; } }
+@keyframes hx-l { from { opacity: 0; transform: translateX(-40px); } to { opacity: 1; transform: none; } }
+@keyframes hx-r { from { opacity: 0; transform: translateX(60px); } to { opacity: 1; transform: none; } }
+@keyframes hx-zoom { from { transform: scale(1.15); } to { transform: none; } }
+@keyframes hx-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+@keyframes hx-cue { from { transform: translateY(-100%); } to { transform: translateY(300%); } }
+@keyframes hx-ghost { to { transform: translateX(-50%); } }
+@keyframes st-fill { to { transform: none; } }
+
+/* Hero: headline lines slide up out of a mask */
+.hl { overflow: hidden; padding-bottom: 0.12em; margin-bottom: -0.12em; }
+.hl > span { display: block; animation: hx-up 1s var(--ease) both; animation-delay: var(--d, 0s); }
+.hx-drop { animation: hx-drop 0.8s var(--ease) both; }
+.hx-l { animation: hx-l 0.9s var(--ease) both; animation-delay: var(--d, 0s); }
+.hx-photo { animation: hx-r 1.1s var(--ease) 0.15s both; }
+.hx-stripe { animation: hx-drop 1s var(--ease) 0.55s both; }
+.hx-zoom { animation: hx-zoom 2.4s var(--ease) both; }
+.hx-card { animation: hx-r 1s var(--ease) 1.1s both; }
+.hx-card > div { animation: hx-float 7s ease-in-out 2.2s infinite; }
+.hx-cue span { animation: hx-cue 2.4s ease-in-out infinite; }
+.hx-ghost { animation: hx-ghost 70s linear infinite; }
+
+@media (min-width: 1024px) {
+  .hx-photo { clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%); }
+  .hx-stripe { clip-path: polygon(20% 0, calc(20% + 30px) 0, 30px 100%, 0 100%); }
+}
+
+/* Category panels slide open */
+.pn { transition: flex-grow 0.8s var(--ease); }
+
+/* Pill buttons: a circle of colour grows from the left edge on hover */
+.bt {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 3.25rem;
+  padding: 0 1.75rem;
+  border-radius: 999px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: color 0.4s ease, border-color 0.4s ease;
+}
+.bt::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  top: 50%;
+  width: 220%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.6s var(--ease);
+}
+.bt:hover::before, .bt:focus-visible::before { transform: translate(-50%, -50%) scale(1); }
+.bt-yellow { background: var(--color-sun-400); color: var(--color-pine-950); }
+.bt-yellow::before { background: #fff; }
+.bt-pine { background: var(--color-pine-800); color: #fff; }
+.bt-pine::before { background: var(--color-sun-400); }
+.bt-pine:hover { color: var(--color-pine-950); }
+.bt-ghost { border: 1.5px solid rgb(255 255 255 / 0.35); color: #fff; }
+.bt-ghost::before { background: #fff; }
+.bt-ghost:hover { border-color: #fff; color: var(--color-pine-950); }
+
+/* Nav links: sliding underline */
+.nv { position: relative; }
+.nv::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 2px;
+  background: var(--color-sun-400);
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.35s var(--ease);
+}
+.nv:hover::after { transform: scaleX(1); transform-origin: left; }
+
+/* Scroll reveals. JS only hides elements that start below the fold. */
+.rv-hide { opacity: 0; }
+.rv-hide.rv-l { transform: translateX(-60px); }
+.rv-hide.rv-r { transform: translateX(60px); }
+.rv-hide.rv-u { transform: translateY(36px); }
+.rv-show { transition: opacity 0.9s var(--ease) var(--d, 0s), transform 0.9s var(--ease) var(--d, 0s); }
+.st-num { -webkit-text-stroke: 2px var(--color-pine-900); color: var(--color-pine-900); transition: color 0.9s ease 0.3s; }
+.rv-hide .st-num { color: transparent; }
+
+/* Safety "stories": the progress bar ends, the next slide slides in */
+.st-in { animation: hx-r 0.7s var(--ease) both; }
+.st-bar { position: absolute; inset: 0; border-radius: 999px; background: var(--color-sun-400); transform: scaleX(0); transform-origin: left; }
+.st-done { transform: none; }
+.st-run { animation: st-fill 6s linear forwards; }
+.st:hover .st-run, .st:focus-within .st-run { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .site *, .site *::before, .site *::after { animation: none !important; transition: none !important; }
+  .st-run { transform: none; }
 }

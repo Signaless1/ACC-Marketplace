@@ -13,73 +13,71 @@ export default function Toast() {
     const { flash } = usePage<SharedProps>().props;
     const [toasts, setToasts] = useState<ToastItem[]>([]);
 
+    const dismiss = (id: number) =>
+        setToasts((current) => current.filter((toast) => toast.id !== id));
+
     useEffect(() => {
         const incoming: ToastItem[] = [];
 
         if (flash?.success) {
-            incoming.push({
-                id: Date.now(),
-                kind: 'success',
-                message: flash.success,
-            });
+            incoming.push({ id: Date.now(), kind: 'success', message: flash.success });
         }
 
         if (flash?.error) {
-            incoming.push({
-                id: Date.now() + 1,
-                kind: 'error',
-                message: flash.error,
-            });
+            incoming.push({ id: Date.now() + 1, kind: 'error', message: flash.error });
         }
 
-        if (incoming.length === 0) {
-            return;
-        }
+        if (incoming.length === 0) return;
 
         setToasts((current) => [...current, ...incoming]);
 
         const timers = incoming.map((toast) =>
-            window.setTimeout(() => dismiss(toast.id), 5000),
+            window.setTimeout(() => dismiss(toast.id), 5500),
         );
 
         return () => timers.forEach((timer) => window.clearTimeout(timer));
     }, [flash?.success, flash?.error]);
 
-    const dismiss = (id: number) =>
-        setToasts((current) => current.filter((toast) => toast.id !== id));
-
-    if (toasts.length === 0) {
-        return null;
-    }
+    if (toasts.length === 0) return null;
 
     return (
         <div
-            className="fixed right-4 top-4 z-[100] flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2"
+            className="pointer-events-none fixed right-4 top-4 z-[120] print:hidden flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2"
             role="status"
             aria-live="polite"
         >
             {toasts.map((toast) => (
                 <div
                     key={toast.id}
-                    className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-lg ${
+                    className={`ui-slide-in pointer-events-auto flex items-start gap-3 rounded-2xl border bg-white px-4 py-3.5 text-sm shadow-[var(--shadow-lift)] ${
                         toast.kind === 'success'
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                            : 'border-red-200 bg-red-50 text-red-800'
+                            ? 'border-pine-600/30'
+                            : 'border-red-300'
                     }`}
                 >
-                    {toast.kind === 'success' ? (
-                        <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
-                    ) : (
-                        <AlertCircle size={18} className="mt-0.5 shrink-0" />
-                    )}
+                    <span
+                        className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+                            toast.kind === 'success'
+                                ? 'bg-mist-100 text-pine-700'
+                                : 'bg-red-50 text-red-600'
+                        }`}
+                    >
+                        {toast.kind === 'success' ? (
+                            <CheckCircle2 size={16} />
+                        ) : (
+                            <AlertCircle size={16} />
+                        )}
+                    </span>
 
-                    <p className="flex-1 font-medium">{toast.message}</p>
+                    <p className="flex-1 pt-0.5 font-medium text-ink">
+                        {toast.message}
+                    </p>
 
                     <button
                         type="button"
                         onClick={() => dismiss(toast.id)}
                         aria-label="Dismiss"
-                        className="opacity-60 transition hover:opacity-100"
+                        className="rounded-md p-0.5 text-ink-3 transition hover:bg-mist-100 hover:text-ink"
                     >
                         <X size={16} />
                     </button>

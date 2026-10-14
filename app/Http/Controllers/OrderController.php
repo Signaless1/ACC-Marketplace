@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Listing;
 use App\Models\Order;
+use App\Models\OrderEvent;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -35,8 +36,8 @@ class OrderController extends Controller
                 'listing.images',
                 'seller:id,name,avatar_path',
                 'review',
-                'reports' => fn ($q) => $q->where('reporter_id', $userId)->select('id', 'order_id', 'status'),
             ])
+            ->withCount(['reports as my_reports_count' => fn ($q) => $q->where('reporter_id', $userId)])
             ->latest()
             ->get();
 
@@ -47,15 +48,14 @@ class OrderController extends Controller
                 'listing.images',
                 'buyer:id,name,avatar_path',
                 'review',
-                'reports' => fn ($q) => $q->where('reporter_id', $userId)->select('id', 'order_id', 'status'),
             ])
+            ->withCount(['reports as my_reports_count' => fn ($q) => $q->where('reporter_id', $userId)])
             ->latest()
             ->get();
 
         return Inertia::render('Orders/Index', [
             'buyingOrders' => $buyingOrders,
             'sellingOrders' => $sellingOrders,
-            'transactionReasons' => \App\Models\Report::TRANSACTION_REASONS,
         ]);
     }
 
@@ -63,21 +63,15 @@ class OrderController extends Controller
         Request $request,
         Listing $listing
     ): RedirectResponse {
-        $buyer = $request->user();
-
         $validated = $request->validate([
-            'quantity' => [
-                'nullable',
-                'integer',
-                'min:'.Listing::QUANTITY_MIN,
-                'max:'.Listing::QUANTITY_MAX,
-            ],
+            'quantity' => ['nullable', 'integer', 'min:1', 'max:'.Listing::MAX_QUANTITY],
         ]);
 
         $quantity = (int) ($validated['quantity'] ?? 1);
+        $buyer = $request->user();
 
-        // The listing row is locked for the duration of the transaction so
-        // two buyers cannot both reserve the same units at once.
+        // The listing row is locked for the whole transaction so two buyers
+        // cannot reserve the same units at once.
         $error = DB::transaction(function () use ($listing, $buyer, $quantity) {
             $locked = Listing::query()
                 ->whereKey($listing->id)
@@ -92,34 +86,27 @@ class OrderController extends Controller
                 return 'You cannot order your own listing.';
             }
 
-            if ($locked->status !== 'available') {
+            if ($locked->quantity < 1) {
                 return 'This listing is no longer available.';
             }
 
             if ($quantity > $locked->quantity) {
-                return $locked->quantity === 1
-                    ? 'Only 1 unit is left.'
-                    : "Only {$locked->quantity} units are left.";
+                return "Only {$locked->quantity} left. Lower the quantity and try again.";
             }
 
-            Order::create([
+            $order = Order::create([
                 'listing_id' => $locked->id,
                 'buyer_id' => $buyer->id,
                 'seller_id' => $locked->user_id,
-                // Unit price at the time of ordering.
                 'price' => $locked->price,
                 'quantity' => $quantity,
                 'status' => 'pending',
             ]);
 
-            // Units are held for this buyer. When none are left the listing
-            // shows as reserved until an order is cancelled or completed.
-            $remaining = $locked->quantity - $quantity;
+            OrderEvent::record($order, 'placed', $buyer->id);
 
-            $locked->update([
-                'quantity' => $remaining,
-                'status' => $remaining > 0 ? 'available' : 'reserved',
-            ]);
+            $locked->decrement('quantity', $quantity);
+            $locked->refresh()->syncStatus();
 
             return null;
         });
@@ -142,12 +129,14 @@ class OrderController extends Controller
         $error = $this->transition(
             $order,
             'confirmed',
-            'This order can no longer be confirmed.'
+            'This order can no longer be confirmed.',
+            $request->user()->id,
+            ['confirmed_at' => now()]
         );
 
         return $error
             ? back()->with('error', $error)
-            : back()->with('success', 'Order confirmed successfully.');
+            : back()->with('success', 'Order confirmed. Arrange the meet-up in Messages.');
     }
 
     public function complete(
@@ -159,7 +148,9 @@ class OrderController extends Controller
         $error = $this->transition(
             $order,
             'completed',
-            'Only confirmed orders can be completed.'
+            'Only confirmed orders can be completed.',
+            $request->user()->id,
+            ['completed_at' => now()]
         );
 
         return $error
@@ -173,10 +164,21 @@ class OrderController extends Controller
     ): RedirectResponse {
         Gate::authorize('cancel', $order);
 
+        $validated = $request->validate([
+            'reason' => ['nullable', 'string', 'max:255'],
+        ]);
+
         $error = $this->transition(
             $order,
             'cancelled',
-            'This order can no longer be cancelled.'
+            'This order can no longer be cancelled.',
+            $request->user()->id,
+            [
+                'cancelled_at' => now(),
+                'cancelled_by' => $request->user()->id,
+                'cancel_reason' => $validated['reason'] ?? null,
+            ],
+            restoreStock: true
         );
 
         return $error
@@ -185,15 +187,21 @@ class OrderController extends Controller
     }
 
     /**
-     * Move an order to a new status and keep the listing's stock and status
-     * in sync, all inside a single transaction with the rows locked.
+     * Move an order to a new status inside one transaction, with the order
+     * and listing rows locked, then bring the listing's stock and status in line.
+     *
+     * @param  int  $actorId  the user who made the change (for the audit trail)
+     * @param  array<string, mixed>  $attributes  extra columns to write (timestamps, reason…)
      */
     private function transition(
         Order $order,
         string $to,
-        string $errorMessage
+        string $errorMessage,
+        int $actorId,
+        array $attributes = [],
+        bool $restoreStock = false
     ): ?string {
-        return DB::transaction(function () use ($order, $to, $errorMessage) {
+        return DB::transaction(function () use ($order, $to, $errorMessage, $actorId, $attributes, $restoreStock) {
             $locked = Order::query()
                 ->whereKey($order->id)
                 ->lockForUpdate()
@@ -203,37 +211,23 @@ class OrderController extends Controller
                 return $errorMessage;
             }
 
-            $locked->update(['status' => $to]);
+            $locked->update(['status' => $to] + $attributes);
+
+            // Audit trail: placed | confirmed | completed | cancelled.
+            OrderEvent::record($locked, $to, $actorId);
 
             $listing = Listing::query()
                 ->whereKey($locked->listing_id)
                 ->lockForUpdate()
                 ->first();
 
-            if (! $listing) {
-                return null;
-            }
-
-            if ($to === 'cancelled') {
-                // Give the held units back and reopen the listing.
-                $listing->update([
-                    'quantity' => $listing->quantity + $locked->quantity,
-                    'status' => 'available',
-                ]);
-            }
-
-            if ($to === 'completed') {
-                $othersStillActive = Order::query()
-                    ->where('listing_id', $listing->id)
-                    ->whereKeyNot($locked->id)
-                    ->whereIn('status', ['pending', 'confirmed'])
-                    ->exists();
-
-                // Every unit was held (listing is "reserved") and nothing
-                // else is in flight, so the listing is now sold out.
-                if ($listing->status === 'reserved' && ! $othersStillActive) {
-                    $listing->update(['status' => 'sold', 'quantity' => 0]);
+            if ($listing) {
+                if ($restoreStock) {
+                    $listing->increment('quantity', $locked->quantity);
+                    $listing->refresh();
                 }
+
+                $listing->syncStatus();
             }
 
             return null;

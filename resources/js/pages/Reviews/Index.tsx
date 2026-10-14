@@ -3,32 +3,30 @@ import { Star } from 'lucide-react';
 import { useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
 import Avatar from '../../components/ui/Avatar';
+import { AttachmentGrid } from '../../components/ui/Attachments';
+import EmptyState from '../../components/ui/EmptyState';
+import PageHeader, { Page } from '../../components/ui/PageHeader';
 import Pagination from '../../components/ui/Pagination';
 import ReviewModal from '../../components/ui/ReviewModal';
 import Stars from '../../components/ui/Stars';
-import AttachmentList from '../../components/ui/AttachmentList';
-import { AttachmentData, formatDate, Paginated } from '../../types/shared';
+import { Attachment, Paginated, timeAgo } from '../../types/shared';
 
-interface ReceivedReview {
+interface Person {
     id: number;
-    rating: number;
-    comment: string | null;
-    product_rating?: number | null;
-    attachments?: AttachmentData[];
-    created_at: string;
-    reviewer: { id: number; name: string };
-    listing: { id: number; title: string } | null;
+    name: string;
+    avatar_url: string | null;
 }
 
-interface WrittenReview {
+interface ReviewRow {
     id: number;
     rating: number;
+    product_rating: number | null;
     comment: string | null;
-    product_rating?: number | null;
-    attachments?: AttachmentData[];
     created_at: string;
-    seller: { id: number; name: string };
+    reviewer?: Person;
+    seller?: Person;
     listing: { id: number; title: string } | null;
+    attachments: Attachment[];
 }
 
 interface PendingOrder {
@@ -38,63 +36,99 @@ interface PendingOrder {
 }
 
 interface Props {
-    received: Paginated<ReceivedReview>;
-    written: Paginated<WrittenReview>;
+    received: Paginated<ReviewRow>;
+    written: Paginated<ReviewRow>;
     pending: PendingOrder[];
+}
+
+function ReviewCard({ review, perspective }: { review: ReviewRow; perspective: 'received' | 'written' }) {
+    const person = perspective === 'received' ? review.reviewer : review.seller;
+
+    return (
+        <article className="ui-card p-5">
+            <div className="flex items-start gap-3.5">
+                {person && <Avatar name={person.name} url={person.avatar_url} size={42} />}
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            {person && (
+                                <Link href={`/users/${person.id}`} className="text-sm font-bold text-ink hover:text-pine-700">
+                                    {perspective === 'written' && <span className="font-medium text-ink-3">Seller: </span>}
+                                    {person.name}
+                                </Link>
+                            )}
+                            <p className="text-xs text-ink-3">
+                                {timeAgo(review.created_at)}
+                                {review.listing && (
+                                    <>
+                                        {' · '}
+                                        <Link href={`/listings/${review.listing.id}`} className="font-semibold hover:text-pine-700">
+                                            {review.listing.title}
+                                        </Link>
+                                    </>
+                                )}
+                            </p>
+                        </div>
+                    </div>
+
+                    <dl className="mt-2.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-xs text-ink-2">
+                        {review.product_rating !== null && (
+                            <div className="flex items-center gap-2">
+                                <dt className="font-semibold">Product</dt>
+                                <dd><Stars value={review.product_rating} size={14} /></dd>
+                            </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                            <dt className="font-semibold">Seller</dt>
+                            <dd><Stars value={review.rating} size={14} /></dd>
+                        </div>
+                    </dl>
+
+                    {review.comment && (
+                        <p className="mt-3 whitespace-pre-line break-words text-[15px] leading-relaxed text-ink-2">
+                            {review.comment}
+                        </p>
+                    )}
+
+                    {review.attachments.length > 0 && (
+                        <div className="mt-3">
+                            <AttachmentGrid attachments={review.attachments} />
+                        </div>
+                    )}
+                </div>
+            </div>
+        </article>
+    );
 }
 
 export default function Index({ received, written, pending }: Props) {
     const [tab, setTab] = useState<'received' | 'written'>('received');
     const [reviewing, setReviewing] = useState<PendingOrder | null>(null);
 
-    const tabClass = (active: boolean) =>
-        `rounded-lg px-4 py-2 text-sm font-semibold transition ${
-            active
-                ? 'bg-[#176B4D] text-white'
-                : 'text-slate-600 hover:bg-[#EAF4EF]'
-        }`;
+    const list = tab === 'received' ? received : written;
 
     return (
         <AppLayout>
             <Head title="Reviews" />
 
-            <div className="min-h-screen bg-[#F7F9F8] px-4 py-8 sm:px-6">
-                <div className="mx-auto max-w-3xl space-y-8">
-                    <div className="flex items-center gap-3">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#EAF4EF] text-[#176B4D]">
-                            <Star size={22} />
-                        </div>
-                        <h1 className="text-2xl font-bold text-[#17352A]">
-                            Reviews
-                        </h1>
-                    </div>
+            <Page>
+                <PageHeader icon={Star} title="Reviews" subtitle="What buyers say about you, and what you have said about sellers" />
 
+                <div className="mx-auto max-w-3xl space-y-6">
                     {pending.length > 0 && (
-                        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-                            <h2 className="text-sm font-bold text-amber-900">
+                        <section className="rounded-2xl border border-sun-400/60 bg-sun-300/25 p-5">
+                            <h2 className="font-display text-base font-extrabold text-pine-950">
                                 Waiting for your review ({pending.length})
                             </h2>
-
                             <ul className="mt-3 space-y-2">
                                 {pending.map((order) => (
-                                    <li
-                                        key={order.id}
-                                        className="flex items-center justify-between gap-3 rounded-xl bg-white px-4 py-3"
-                                    >
+                                    <li key={order.id} className="flex items-center justify-between gap-3 rounded-xl bg-white px-4 py-3 ring-1 ring-mist-200">
                                         <div className="min-w-0">
-                                            <p className="truncate text-sm font-semibold text-slate-800">
-                                                {order.listing.title}
-                                            </p>
-                                            <p className="text-xs text-slate-500">
-                                                Seller: {order.seller.name}
-                                            </p>
+                                            <p className="truncate text-sm font-bold text-ink">{order.listing.title}</p>
+                                            <p className="text-xs text-ink-3">Seller: {order.seller.name}</p>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => setReviewing(order)}
-                                            className="shrink-0 rounded-lg bg-[#176B4D] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#12583F]"
-                                        >
-                                            Write review
+                                        <button type="button" onClick={() => setReviewing(order)} className="ui-btn ui-btn-gold ui-btn-sm shrink-0">
+                                            <Star size={14} /> Write review
                                         </button>
                                     </li>
                                 ))}
@@ -102,112 +136,49 @@ export default function Index({ received, written, pending }: Props) {
                         </section>
                     )}
 
-                    <div className="flex gap-2 rounded-xl border border-[#E1E9E4] bg-white p-1.5 shadow-sm">
-                        <button
-                            type="button"
-                            className={tabClass(tab === 'received')}
-                            onClick={() => setTab('received')}
-                        >
-                            Received ({received.total})
-                        </button>
-                        <button
-                            type="button"
-                            className={tabClass(tab === 'written')}
-                            onClick={() => setTab('written')}
-                        >
-                            Written ({written.total})
-                        </button>
+                    <div className="inline-flex gap-1.5 rounded-2xl bg-white p-1.5 ring-1 ring-mist-200" role="tablist">
+                        {(
+                            [
+                                ['received', 'Received', received.total],
+                                ['written', 'Written', written.total],
+                            ] as const
+                        ).map(([value, label, count]) => (
+                            <button
+                                key={value}
+                                type="button"
+                                role="tab"
+                                aria-selected={tab === value}
+                                onClick={() => setTab(value)}
+                                className={`rounded-xl px-5 py-2.5 text-sm font-bold transition ${
+                                    tab === value ? 'bg-pine-800 text-white' : 'text-ink-2 hover:bg-mist-100'
+                                }`}
+                            >
+                                {label} ({count})
+                            </button>
+                        ))}
                     </div>
 
-                    {tab === 'received' ? (
-                        <section>
-                            {received.data.length > 0 ? (
-                                <div className="space-y-3">
-                                    {received.data.map((review) => (
-                                        <article
-                                            key={review.id}
-                                            className="rounded-2xl border border-[#E1E9E4] bg-white p-5 shadow-sm"
-                                        >
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div className="flex items-center gap-3">
-                                                    <Avatar
-                                                        name={review.reviewer.name}
-                                                        size={36}
-                                                    />
-                                                    <div>
-                                                        <p className="text-sm font-semibold text-slate-800">
-                                                            {review.reviewer.name}
-                                                        </p>
-                                                        <p className="text-xs text-slate-400">
-                                                            {formatDate(review.created_at)}
-                                                            {review.listing &&
-                                                                ` · ${review.listing.title}`}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                                <Stars value={review.rating} />
-                                            </div>
-                                            {review.comment && (
-                                                <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">
-                                                    {review.comment}
-                                                </p>
-                                            )}
-                                            <AttachmentList attachments={review.attachments ?? []} />
-                                        </article>
-                                    ))}
-                                </div>
-                            ) : (
-                                <p className="rounded-2xl border border-dashed border-[#DDE6E0] bg-white px-6 py-12 text-center text-sm text-slate-500">
-                                    You haven't received any reviews yet.
-                                    Complete a sale to get your first one.
-                                </p>
-                            )}
-                            <Pagination links={received.links} />
-                        </section>
+                    {list.data.length > 0 ? (
+                        <div className="space-y-3">
+                            {list.data.map((review) => (
+                                <ReviewCard key={review.id} review={review} perspective={tab} />
+                            ))}
+                        </div>
                     ) : (
-                        <section>
-                            {written.data.length > 0 ? (
-                                <div className="space-y-3">
-                                    {written.data.map((review) => (
-                                        <article
-                                            key={review.id}
-                                            className="rounded-2xl border border-[#E1E9E4] bg-white p-5 shadow-sm"
-                                        >
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div>
-                                                    <Link
-                                                        href={`/users/${review.seller.id}`}
-                                                        className="text-sm font-semibold text-slate-800 hover:text-[#176B4D]"
-                                                    >
-                                                        {review.seller.name}
-                                                    </Link>
-                                                    <p className="text-xs text-slate-400">
-                                                        {formatDate(review.created_at)}
-                                                        {review.listing &&
-                                                            ` · ${review.listing.title}`}
-                                                    </p>
-                                                </div>
-                                                <Stars value={review.rating} />
-                                            </div>
-                                            {review.comment && (
-                                                <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">
-                                                    {review.comment}
-                                                </p>
-                                            )}
-                                            <AttachmentList attachments={review.attachments ?? []} />
-                                        </article>
-                                    ))}
-                                </div>
-                            ) : (
-                                <p className="rounded-2xl border border-dashed border-[#DDE6E0] bg-white px-6 py-12 text-center text-sm text-slate-500">
-                                    You haven't written any reviews yet.
-                                </p>
-                            )}
-                            <Pagination links={written.links} />
-                        </section>
+                        <EmptyState
+                            icon={Star}
+                            title={tab === 'received' ? 'No reviews yet' : 'You have not written any reviews'}
+                            text={
+                                tab === 'received'
+                                    ? 'Complete a sale and your buyer can rate you here.'
+                                    : 'After an order is completed you can rate the product and the seller.'
+                            }
+                        />
                     )}
+
+                    <Pagination links={list.links} />
                 </div>
-            </div>
+            </Page>
 
             {reviewing && (
                 <ReviewModal

@@ -7,27 +7,36 @@ use App\Models\Order;
 use App\Models\Review;
 use App\Models\User;
 use App\Support\SellerRating;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class ProfileController extends Controller
 {
-    public function show(Request $request, User $user): Response
+    public function show(Request $request, User $user): Response|RedirectResponse
     {
         $viewer = $request->user();
 
-        abort_if(
-            $user->isSuspended() && ! $viewer->isAdmin() && $viewer->id !== $user->id,
-            404
-        );
+        // A suspended profile stays hidden from everyone except admins and
+        // the owner. Instead of a bare 404, send the visitor somewhere safe
+        // and show a "this user is suspended" pop-up.
+        if ($user->isSuspended() && ! $viewer->isAdmin() && $viewer->id !== $user->id) {
+            return redirect()
+                ->route('dashboard')
+                ->with('suspended', ['name' => $user->name]);
+        }
 
-        $listings = Listing::query()
+        $activeListings = Listing::query()
             ->where('user_id', $user->id)
-            ->where('status', 'available')
-            ->whereNull('hidden_at')
-            ->with(['category', 'images'])
-            ->withProductRating()
+            ->where('quantity', '>', 0)
+            ->whereNull('hidden_at');
+
+        // Counted separately so the number is not capped by the 12 cards shown.
+        $activeListingsCount = (clone $activeListings)->count();
+
+        $listings = (clone $activeListings)
+            ->forCards()
             ->latest()
             ->take(12)
             ->get();
@@ -39,19 +48,20 @@ class ProfileController extends Controller
             ->paginate(10)
             ->withQueryString();
 
+        // Aggregates always come from the whole reviews table, never a page.
         $rating = SellerRating::summary($user->id);
 
-        // Completed orders the viewer may still review for this seller.
+        // Completed orders from this seller that the viewer has not reviewed yet.
         $reviewableOrders = $viewer->id === $user->id
             ? collect()
             : Order::query()
-                ->where('buyer_id', $viewer->id)
                 ->where('seller_id', $user->id)
+                ->where('buyer_id', $viewer->id)
                 ->where('status', 'completed')
                 ->doesntHave('review')
                 ->with('listing:id,title')
                 ->latest()
-                ->get(['id', 'listing_id']);
+                ->get(['id', 'listing_id', 'quantity', 'completed_at']);
 
         return Inertia::render('Profile/Show', [
             'profile' => [
@@ -66,20 +76,15 @@ class ProfileController extends Controller
                 'rating' => $rating['average'],
                 'reviews_count' => $rating['count'],
                 'distribution' => $rating['distribution'],
-                // True totals, not the size of the 12-item page below.
-                'active_listings' => Listing::query()
-                    ->where('user_id', $user->id)
-                    ->where('status', 'available')
-                    ->whereNull('hidden_at')
-                    ->count(),
+                'active_listings' => $activeListingsCount,
                 'completed_sales' => Order::query()
                     ->where('seller_id', $user->id)
                     ->where('status', 'completed')
                     ->count(),
             ],
-            'reviewableOrders' => $reviewableOrders,
             'listings' => $listings,
             'reviews' => $reviews,
+            'reviewableOrders' => $reviewableOrders->values(),
             'isOwnProfile' => $viewer->id === $user->id,
         ]);
     }

@@ -2,10 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Attachment;
 use App\Models\Order;
 use App\Models\Review;
-use Illuminate\Database\UniqueConstraintViolationException;
+use App\Support\Attachments;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -14,6 +13,8 @@ use Inertia\Response;
 
 class ReviewController extends Controller
 {
+    private const MAX_FILES = 4;
+
     public function index(Request $request): Response
     {
         $userId = $request->user()->id;
@@ -52,69 +53,44 @@ class ReviewController extends Controller
         Gate::authorize('review', $order);
 
         if ($order->status !== 'completed') {
-            return back()->with(
-                'error',
-                'You can only review completed orders.'
-            );
+            return back()->with('error', 'You can only review completed orders.');
         }
 
         if ($order->review()->exists()) {
-            return back()->with(
-                'error',
-                'You have already reviewed this order.'
-            );
-        }
-
-        $validated = $request->validate([
-            // Rating of the seller.
-            'rating' => ['required', 'integer', 'between:1,5'],
-            // Rating of the product itself.
-            'product_rating' => ['nullable', 'integer', 'between:1,5'],
-            'comment' => ['nullable', 'string', 'max:1000'],
-            'attachments' => ['nullable', 'array', 'max:4'],
-            'attachments.*' => Attachment::mediaRules(),
-        ]);
-
-        try {
-            $review = Review::create([
-                'order_id' => $order->id,
-                'listing_id' => $order->listing_id,
-                'reviewer_id' => $request->user()->id,
-                'seller_id' => $order->seller_id,
-                'rating' => $validated['rating'],
-                'product_rating' => $validated['product_rating'] ?? null,
-                'comment' => $validated['comment'] ?? null,
-            ]);
-        } catch (UniqueConstraintViolationException) {
-            // Two simultaneous submissions: the DB unique key on order_id wins.
             return back()->with('error', 'You have already reviewed this order.');
         }
 
-        foreach ($request->file('attachments', []) as $file) {
-            $review->attachments()->create(
-                Attachment::storeUpload($file, 'review-attachments')
-            );
-        }
+        $validated = $request->validate(
+            [
+                'product_rating' => ['required', 'integer', 'between:1,5'],
+                'rating' => ['required', 'integer', 'between:1,5'],
+                'comment' => ['nullable', 'string', 'max:1000'],
+                ...Attachments::rules('attachments', self::MAX_FILES, Attachments::REVIEW_TYPES),
+            ],
+            [
+                'product_rating.required' => 'Please rate the product.',
+                'rating.required' => 'Please rate the seller.',
+                ...Attachments::messages('attachments', self::MAX_FILES, Attachments::REVIEW_TYPES),
+            ]
+        );
+
+        $review = Review::create([
+            'order_id' => $order->id,
+            'listing_id' => $order->listing_id,
+            'reviewer_id' => $request->user()->id,
+            'seller_id' => $order->seller_id,
+            'product_rating' => $validated['product_rating'],
+            'rating' => $validated['rating'],
+            'comment' => $validated['comment'] ?? null,
+        ]);
+
+        Attachments::store(
+            $review,
+            $request->file('attachments', []),
+            'public',
+            'review-attachments'
+        );
 
         return back()->with('success', 'Thanks! Your review has been posted.');
-    }
-
-    /**
-     * The seller of a review can answer it once (and edit the answer).
-     */
-    public function reply(Request $request, Review $review): RedirectResponse
-    {
-        abort_unless($review->seller_id === $request->user()->id, 403);
-
-        $validated = $request->validate([
-            'reply' => ['required', 'string', 'min:2', 'max:500'],
-        ]);
-
-        $review->update([
-            'seller_reply' => $validated['reply'],
-            'seller_replied_at' => now(),
-        ]);
-
-        return back()->with('success', 'Your reply has been posted.');
     }
 }

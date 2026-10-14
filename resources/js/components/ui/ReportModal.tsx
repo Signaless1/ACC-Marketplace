@@ -8,17 +8,9 @@ interface ReportModalProps {
     title: string;
     reasons: Record<string, string>;
     onClose: () => void;
-    /** Optional explanation shown above the form. */
-    note?: string;
 }
 
-export default function ReportModal({
-    action,
-    title,
-    reasons,
-    onClose,
-    note,
-}: ReportModalProps) {
+export default function ReportModal({ action, title, reasons, onClose }: ReportModalProps) {
     const [reason, setReason] = useState('');
     const [description, setDescription] = useState('');
     const [errors, setErrors] = useState<Record<string, string>>({});
@@ -41,78 +33,47 @@ export default function ReportModal({
     return (
         <Modal title={title} onClose={onClose}>
             <div className="space-y-4">
-                {note && (
-                    <p className="rounded-xl bg-[#F3F8F5] p-3 text-sm text-[#34483e]">{note}</p>
-                )}
-
                 <div>
-                    <label
-                        htmlFor="report-reason"
-                        className="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        Reason
-                    </label>
-
+                    <label htmlFor="report-reason" className="ui-label">Reason</label>
                     <select
                         id="report-reason"
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-[#176B4D]"
+                        className={`ui-input ${errors.reason ? 'ui-input-error' : ''}`}
                     >
                         <option value="">Select a reason…</option>
                         {Object.entries(reasons).map(([key, label]) => (
-                            <option key={key} value={key}>
-                                {label}
-                            </option>
+                            <option key={key} value={key}>{label}</option>
                         ))}
                     </select>
-
-                    {errors.reason && (
-                        <p className="mt-1 text-xs text-red-600">
-                            {errors.reason}
-                        </p>
-                    )}
+                    {errors.reason && <p className="ui-error">{errors.reason}</p>}
                 </div>
 
                 <div>
-                    <label
-                        htmlFor="report-description"
-                        className="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        Tell us what happened (optional)
+                    <label htmlFor="report-description" className="ui-label">
+                        Details <span className="font-normal text-ink-3">(optional)</span>
                     </label>
-
                     <textarea
                         id="report-description"
                         rows={4}
                         maxLength={1000}
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-[#176B4D]"
+                        className="ui-input"
                         placeholder="Tell us what happened…"
                     />
-
-                    {errors.description && (
-                        <p className="mt-1 text-xs text-red-600">
-                            {errors.description}
-                        </p>
-                    )}
+                    {errors.description && <p className="ui-error">{errors.description}</p>}
                 </div>
 
-                <div className="flex justify-end gap-2">
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                    >
+                <div className="flex justify-end gap-2 pt-1">
+                    <button type="button" onClick={onClose} className="ui-btn ui-btn-outline ui-btn-sm">
                         Cancel
                     </button>
-
                     <button
                         type="button"
                         onClick={submit}
                         disabled={!reason || processing}
-                        className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="ui-btn ui-btn-danger ui-btn-sm"
                     >
                         {processing ? 'Submitting…' : 'Submit report'}
                     </button>

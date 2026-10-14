@@ -19,8 +19,7 @@ class FavoriteController extends Controller
                 $request->user()->favorites()->select('listing_id')
             )
             ->visible()
-            ->with(['category', 'images', 'seller:id,name'])
-            ->withProductRating()
+            ->forCards()
             ->latest()
             ->paginate(12)
             ->withQueryString();

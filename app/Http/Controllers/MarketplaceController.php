@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Category;
 use App\Models\Listing;
+use App\Models\Review;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -19,7 +20,8 @@ class MarketplaceController extends Controller
             'min_price' => ['nullable', 'numeric', 'min:0'],
             'max_price' => ['nullable', 'numeric', 'min:0'],
             'availability' => ['nullable', 'in:available,all'],
-            'sort' => ['nullable', 'in:newest,oldest,price_asc,price_desc'],
+            'sort' => ['nullable', 'in:newest,oldest,price_asc,price_desc,top_rated,popular'],
+            'min_rating' => ['nullable', 'integer', 'between:1,5'],
         ]);
 
         $availability = $filters['availability'] ?? 'available';
@@ -28,8 +30,7 @@ class MarketplaceController extends Controller
 
         $query = Listing::query()
             ->visible()
-            ->with(['category', 'images', 'seller:id,name'])
-            ->withProductRating()
+            ->forCards()
             ->when(
                 $availability === 'available',
                 fn ($q) => $q->where('status', 'available')
@@ -64,7 +65,17 @@ class MarketplaceController extends Controller
                 fn ($q) => $q->where('price', '<=', $filters['max_price'])
             );
 
+        if (! empty($filters['min_rating'])) {
+            $query->whereIn('id', Review::query()
+                ->select('listing_id')
+                ->whereNotNull('product_rating')
+                ->groupBy('listing_id')
+                ->havingRaw('AVG(product_rating) >= ?', [(int) $filters['min_rating']]));
+        }
+
         match ($sort) {
+            'top_rated' => $query->orderByDesc('rating_avg')->orderByDesc('rating_count')->latest(),
+            'popular' => $query->orderByDesc('favorites_count')->orderByDesc('views_count')->latest(),
             'oldest' => $query->oldest(),
             'price_asc' => $query->orderBy('price')->latest(),
             'price_desc' => $query->orderByDesc('price')->latest(),
@@ -89,6 +100,7 @@ class MarketplaceController extends Controller
                 'max_price' => $filters['max_price'] ?? '',
                 'availability' => $availability,
                 'sort' => $sort,
+                'min_rating' => $filters['min_rating'] ?? '',
             ],
         ]);
     }

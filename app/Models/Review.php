@@ -16,8 +16,6 @@ class Review extends Model
         'rating',
         'product_rating',
         'comment',
-        'seller_reply',
-        'seller_replied_at',
     ];
 
     protected function casts(): array
@@ -25,7 +23,6 @@ class Review extends Model
         return [
             'rating' => 'integer',
             'product_rating' => 'integer',
-            'seller_replied_at' => 'datetime',
         ];
     }
 

@@ -34,6 +34,14 @@ class OrderPolicy
     }
 
     /**
+     * Compile or file a transaction report: the two parties and admins.
+     */
+    public function report(User $user, Order $order): bool
+    {
+        return $user->isAdmin() || $this->isParty($user, $order);
+    }
+
+    /**
      * Only the buyer of an order may review it.
      */
     public function review(User $user, Order $order): bool

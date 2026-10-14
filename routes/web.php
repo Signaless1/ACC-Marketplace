@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\MarketplaceController;
 use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
@@ -8,6 +7,10 @@ use App\Http\Controllers\ListingController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AttachmentController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\LiveController;
+use App\Http\Controllers\TransactionReportController;
 use App\Http\Controllers\FavoriteController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReportController;
@@ -37,6 +40,11 @@ Route::post('/logout', [AuthController::class, 'logout']);
 Route::get('/auth/user', [AuthController::class, 'user']);
 
 Route::middleware('auth')->group(function () {
+    // Background refresh for sidebar badges and the new-message pop-up.
+    Route::get('/live', LiveController::class)
+        ->middleware('throttle:120,1')
+        ->name('live');
+
     Route::get('/dashboard', [DashboardController::class, 'index'])
         ->name('dashboard');
 });
@@ -75,22 +83,19 @@ Route::middleware('auth')->group(function () {
     Route::get('/messages', [MessageController::class, 'index'])
         ->name('messages.index');
 
-    // JSON endpoints polled in the background (declared before the
-    // {conversation} routes so "summary"/"list" are not treated as ids).
-    Route::get('/messages/summary', [MessageController::class, 'summary'])
-        ->name('messages.summary');
-
-    Route::get('/messages/list', [MessageController::class, 'list'])
-        ->name('messages.list');
-
-    Route::get('/messages/{conversation}/poll', [MessageController::class, 'poll'])
-        ->name('messages.poll');
-
     Route::get('/messages/{conversation}', [MessageController::class, 'show'])
         ->name('messages.show');
 
     Route::post('/messages/{conversation}', [MessageController::class, 'store'])
+        ->middleware('throttle:60,1')
         ->name('messages.store');
+
+    Route::delete('/messages/{conversation}/{message}', [MessageController::class, 'destroy'])
+        ->middleware('throttle:60,1')
+        ->name('messages.destroy');
+
+    Route::get('/attachments/{attachment}', [AttachmentController::class, 'show'])
+        ->name('attachments.show');
 
     /*
     |--------------------------------------------------------------------------
@@ -115,6 +120,14 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel'])
         ->name('orders.cancel');
+
+    // Compiled transaction document + report to the admins.
+    Route::get('/orders/{order}/report', [TransactionReportController::class, 'show'])
+        ->name('orders.report');
+
+    Route::post('/orders/{order}/report', [TransactionReportController::class, 'store'])
+        ->middleware('throttle:10,1')
+        ->name('orders.report.store');
     /*
     |--------------------------------------------------------------------------
     | Reviews
@@ -126,9 +139,6 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/orders/{order}/review', [ReviewController::class, 'store'])
         ->name('reviews.store');
-
-    Route::post('/reviews/{review}/reply', [ReviewController::class, 'reply'])
-        ->name('reviews.reply');
 
     /*
     |--------------------------------------------------------------------------
@@ -174,14 +184,6 @@ Route::middleware('auth')->group(function () {
     Route::post('/users/{user}/report', [ReportController::class, 'storeUser'])
         ->middleware('throttle:10,1')
         ->name('reports.user');
-
-    Route::post('/orders/{order}/report', [ReportController::class, 'storeOrder'])
-        ->middleware('throttle:10,1')
-        ->name('reports.order');
-
-    // Printable case file (reporter or admin).
-    Route::get('/reports/{report}', [ReportController::class, 'show'])
-        ->name('reports.show');
 });
 
 /*
@@ -201,11 +203,12 @@ Route::middleware(['auth', 'admin'])
         Route::post('/users/{user}/unsuspend', [AdminController::class, 'unsuspendUser'])->name('users.unsuspend');
 
         Route::get('/listings', [AdminController::class, 'listings'])->name('listings');
-        Route::post('/listings/{listing}/hide', [AdminController::class, 'hideListing'])->name('listings.hide');
+        Route::post('/listings/{listing}/remove', [AdminController::class, 'removeListing'])->name('listings.remove');
         Route::post('/listings/{listing}/restore', [AdminController::class, 'restoreListing'])->name('listings.restore');
         Route::delete('/listings/{listing}', [AdminController::class, 'destroyListing'])->name('listings.destroy');
 
+        Route::get('/orders', [AdminController::class, 'orders'])->name('orders');
+
         Route::get('/reports', [AdminController::class, 'reports'])->name('reports');
         Route::patch('/reports/{report}', [AdminController::class, 'updateReport'])->name('reports.update');
-        Route::post('/reports/{report}/escalate', [AdminController::class, 'escalateReport'])->name('reports.escalate');
     });

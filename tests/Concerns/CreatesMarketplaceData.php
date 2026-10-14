@@ -23,6 +23,7 @@ trait CreatesMarketplaceData
     protected function makeListing(User $seller, array $overrides = []): Listing
     {
         $title = $overrides['title'] ?? 'Scientific Calculator';
+        $status = $overrides['status'] ?? 'available';
 
         return Listing::create(array_merge([
             'user_id' => $seller->id,
@@ -31,6 +32,8 @@ trait CreatesMarketplaceData
             'slug' => str()->slug($title).'-'.uniqid(),
             'description' => 'Barely used.',
             'price' => 500,
+            // Reserved and sold listings have no units left to order.
+            'quantity' => $status === 'available' ? 1 : 0,
             'type' => 'item',
             'status' => 'available',
         ], $overrides));

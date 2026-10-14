@@ -40,7 +40,7 @@ export default function Dashboard({
         <AppLayout>
             <Head title="Admin" />
 
-            <div className="min-h-screen bg-[#F7F9F8] px-4 py-8 sm:px-6">
+            <div className="min-h-full px-4 py-8 sm:px-6">
                 <div className="mx-auto max-w-6xl">
                     <AdminNav title="Admin overview" />
 
@@ -50,7 +50,7 @@ export default function Dashboard({
                                 key={key}
                                 className="rounded-2xl border border-[#E1E9E4] bg-white p-5 shadow-sm"
                             >
-                                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                                <p className="text-xs font-medium uppercase tracking-wide text-slate-600">
                                     {label}
                                 </p>
                                 <p
@@ -67,7 +67,7 @@ export default function Dashboard({
                         ))}
 
                         <div className="rounded-2xl border border-[#E1E9E4] bg-white p-5 shadow-sm">
-                            <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                            <p className="text-xs font-medium uppercase tracking-wide text-slate-600">
                                 Average rating
                             </p>
                             <p className="mt-2 text-2xl font-bold text-slate-900">
@@ -89,7 +89,7 @@ export default function Dashboard({
                                             <span className="font-medium text-slate-700">
                                                 {category.name}
                                             </span>
-                                            <span className="text-slate-500">
+                                            <span className="text-slate-600">
                                                 {category.listings_count}
                                             </span>
                                         </div>
@@ -128,7 +128,7 @@ export default function Dashboard({
                                                     report.reported_user?.name ??
                                                     'Deleted item'}
                                             </p>
-                                            <p className="text-xs text-slate-500">
+                                            <p className="text-xs text-slate-600">
                                                 {report.reason} · by {report.reporter.name} ·{' '}
                                                 {formatDate(report.created_at)}
                                             </p>
@@ -136,7 +136,7 @@ export default function Dashboard({
                                     ))}
                                 </ul>
                             ) : (
-                                <p className="mt-4 text-sm text-slate-500">
+                                <p className="mt-4 text-sm text-slate-600">
                                     No pending reports. 🎉
                                 </p>
                             )}

@@ -1,174 +1,213 @@
 import { Head, Link } from '@inertiajs/react';
-import { MessageCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { MessageCircle, Package, Paperclip, Search } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
 import Avatar from '../../components/ui/Avatar';
-import ImagePlaceholder from '../../components/ui/ImagePlaceholder';
-import { getJson } from '../../lib/http';
-import { formatPrice, timeAgo } from '../../types/shared';
+import EmptyState from '../../components/ui/EmptyState';
+import PageHeader, { Page } from '../../components/ui/PageHeader';
+import { useLiveReload } from '../../lib/live';
+import { Attachment, timeAgo } from '../../types/shared';
 
-interface UserData {
+interface Person {
     id: number;
     name: string;
-    avatar_url?: string | null;
+    avatar_url: string | null;
 }
 
 interface Conversation {
     id: number;
+    buyer_id: number;
+    seller_id: number;
+    messages_max_created_at: string | null;
+    unread_messages_count: number;
+    buyer: Person;
+    seller: Person;
     listing: {
         id: number;
         title: string;
-        price: number;
-        status: string;
         images: { id: number; path: string }[];
     };
-    buyer: UserData;
-    seller: UserData;
-    messages_max_created_at: string | null;
-    unread_messages_count: number;
-    last_message_preview: string | null;
+    latest_message: {
+        sender_id: number;
+        is_deleted: boolean;
+        body: string | null;
+        attachments: Attachment[];
+    } | null;
 }
 
-interface Props {
+type Tab = 'all' | 'unread' | 'buying' | 'selling';
+
+export default function Index({
+    conversations,
+    currentUserId,
+}: {
     conversations: Conversation[];
     currentUserId: number;
-}
+}) {
+    const [tab, setTab] = useState<Tab>('all');
+    const [query, setQuery] = useState('');
 
-export default function Index({ conversations: initial, currentUserId }: Props) {
-    const [conversations, setConversations] = useState(initial);
+    // New messages appear here without a refresh.
+    useLiveReload(['conversations'], 4000);
 
-    useEffect(() => setConversations(initial), [initial]);
+    const unreadTotal = conversations.reduce((n, c) => n + c.unread_messages_count, 0);
 
-    // Quiet background refresh so new chats and unread dots appear on their own.
-    useEffect(() => {
-        let stopped = false;
+    const visible = useMemo(() => {
+        const q = query.trim().toLowerCase();
 
-        const tick = async () => {
-            if (stopped || document.hidden) return;
+        return conversations.filter((c) => {
+            const other = c.buyer_id === currentUserId ? c.seller : c.buyer;
 
-            try {
-                const data = await getJson<{ conversations: Conversation[] }>('/messages/list');
-                if (!stopped) setConversations(data.conversations);
-            } catch {
-                // Retry on the next tick.
-            }
-        };
+            if (tab === 'unread' && c.unread_messages_count === 0) return false;
+            if (tab === 'buying' && c.buyer_id !== currentUserId) return false;
+            if (tab === 'selling' && c.seller_id !== currentUserId) return false;
+            if (q && !`${other.name} ${c.listing.title}`.toLowerCase().includes(q)) return false;
 
-        const timer = window.setInterval(tick, 4000);
+            return true;
+        });
+    }, [conversations, tab, query, currentUserId]);
 
-        return () => {
-            stopped = true;
-            window.clearInterval(timer);
-        };
-    }, []);
+    const tabs: [Tab, string][] = [
+        ['all', 'All'],
+        ['unread', `Unread${unreadTotal ? ` (${unreadTotal})` : ''}`],
+        ['buying', 'Buying'],
+        ['selling', 'Selling'],
+    ];
 
     return (
         <AppLayout>
             <Head title="Messages" />
 
-            <div className="mx-auto max-w-4xl">
-                <div className="mb-6 flex items-center gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#176B4D] text-white shadow-md">
-                        <MessageCircle size={22} />
-                    </div>
-                    <div>
-                        <h1 className="font-sans text-2xl font-bold tracking-tight text-[#12291f]">Messages</h1>
-                        <p className="text-sm text-[#43554c]">Your conversations with buyers and sellers</p>
-                    </div>
-                </div>
+            <Page>
+                <PageHeader icon={MessageCircle} title="Messages" subtitle="Your conversations with buyers and sellers" />
 
-                <div className="surface-card overflow-hidden">
-                    {conversations.length === 0 ? (
-                        <div className="flex min-h-[380px] flex-col items-center justify-center px-6 text-center">
-                            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#EAF4EF] text-[#176B4D]">
-                                <MessageCircle size={30} />
+                {conversations.length === 0 ? (
+                    <EmptyState
+                        icon={MessageCircle}
+                        title="No conversations yet"
+                        text="Open any listing and tap “Message seller” to start chatting. Replies show up here instantly."
+                        action={{ label: 'Browse the marketplace', href: '/marketplace' }}
+                    />
+                ) : (
+                    <div className="ui-card overflow-hidden">
+                        <div className="flex flex-wrap items-center gap-3 border-b border-mist-100 p-4">
+                            <div className="flex gap-1.5 rounded-xl bg-mist-100 p-1" role="tablist">
+                                {tabs.map(([value, label]) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={tab === value}
+                                        onClick={() => setTab(value)}
+                                        className={`rounded-lg px-3.5 py-1.5 text-sm font-bold transition ${
+                                            tab === value ? 'bg-white text-pine-800 shadow-sm' : 'text-ink-2 hover:text-pine-800'
+                                        }`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
                             </div>
-                            <h2 className="mt-5 font-sans text-lg font-bold text-[#12291f]">No conversations yet</h2>
-                            <p className="mt-2 max-w-sm text-sm leading-6 text-[#43554c]">
-                                When you message a seller, or someone messages you about a listing, it will appear
-                                here.
-                            </p>
-                            <Link
-                                href="/marketplace"
-                                className="mt-6 rounded-xl bg-[#176B4D] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#12583F]"
-                            >
-                                Browse Marketplace
-                            </Link>
+
+                            <div className="relative ml-auto w-full sm:w-64">
+                                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-3" />
+                                <input
+                                    type="search"
+                                    value={query}
+                                    onChange={(e) => setQuery(e.target.value)}
+                                    placeholder="Search people or items"
+                                    aria-label="Search conversations"
+                                    className="ui-input !h-10 !pl-9 text-sm"
+                                />
+                            </div>
                         </div>
-                    ) : (
-                        <ul>
-                            {conversations.map((conversation) => {
-                                const other =
-                                    conversation.buyer.id === currentUserId ? conversation.seller : conversation.buyer;
-                                const unread = conversation.unread_messages_count;
-                                const cover = conversation.listing.images?.[0];
 
-                                return (
-                                    <li key={conversation.id} className="border-b border-[#EAF0EC] last:border-0">
-                                        <Link
-                                            href={`/messages/${conversation.id}`}
-                                            className={`flex items-center gap-4 px-5 py-4 transition hover:bg-[#F3F8F5] ${
-                                                unread > 0 ? 'bg-[#F6FBF8]' : ''
-                                            }`}
-                                        >
-                                            <div className="relative shrink-0">
-                                                <Avatar name={other.name} url={other.avatar_url} size={50} />
-                                                {unread > 0 && (
-                                                    <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#d4623a] px-1 text-[10px] font-bold text-white ring-2 ring-white">
-                                                        {unread > 9 ? '9+' : unread}
+                        {visible.length > 0 ? (
+                            <ul className="divide-y divide-mist-100">
+                                {visible.map((c) => {
+                                    const other = c.buyer_id === currentUserId ? c.seller : c.buyer;
+                                    const last = c.latest_message;
+                                    const unread = c.unread_messages_count > 0;
+                                    const mine = last?.sender_id === currentUserId;
+                                    const preview = last
+                                        ? last.is_deleted
+                                            ? mine
+                                                ? 'You deleted this message'
+                                                : 'This message was deleted'
+                                            : last.body ||
+                                          (last.attachments.length > 0
+                                              ? `${last.attachments.length} attachment${last.attachments.length === 1 ? '' : 's'}`
+                                              : '')
+                                        : 'No messages yet. Say hello!';
+
+                                    return (
+                                        <li key={c.id}>
+                                            <Link
+                                                href={`/messages/${c.id}`}
+                                                className={`flex items-center gap-4 px-4 py-4 transition hover:bg-mist-50 sm:px-5 ${
+                                                    unread ? 'bg-sun-300/15' : ''
+                                                }`}
+                                            >
+                                                <Avatar name={other.name} url={other.avatar_url} size={48} />
+
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="flex items-baseline justify-between gap-3">
+                                                        <span className={`truncate text-[15px] ${unread ? 'font-extrabold text-ink' : 'font-bold text-ink'}`}>
+                                                            {other.name}
+                                                        </span>
+                                                        <span className="shrink-0 text-xs text-ink-3">
+                                                            {timeAgo(c.messages_max_created_at)}
+                                                        </span>
                                                     </span>
-                                                )}
-                                            </div>
 
-                                            <div className="min-w-0 flex-1">
-                                                <div className="flex items-baseline justify-between gap-3">
-                                                    <h2
-                                                        className={`truncate font-sans text-sm ${
-                                                            unread > 0 ? 'font-bold text-[#12291f]' : 'font-semibold text-[#2f4a3d]'
+                                                    <span className="mt-0.5 block truncate text-xs font-semibold text-pine-700">
+                                                        {c.listing.title}
+                                                    </span>
+
+                                                    <span
+                                                        className={`mt-0.5 flex items-center gap-1.5 truncate text-sm ${
+                                                            unread ? 'font-semibold text-ink' : 'text-ink-2'
                                                         }`}
                                                     >
-                                                        {other.name}
-                                                    </h2>
-                                                    {conversation.messages_max_created_at && (
-                                                        <span className="shrink-0 text-xs text-[#566860]">
-                                                            {timeAgo(conversation.messages_max_created_at)}
+                                                        {last && !last.is_deleted && last.attachments.length > 0 && !last.body && (
+                                                            <Paperclip size={14} className="shrink-0" />
+                                                        )}
+                                                        <span className="truncate">
+                                                            {mine && last && !last.is_deleted ? 'You: ' : ''}
+                                                            {preview}
                                                         </span>
+                                                    </span>
+                                                </span>
+
+                                                <span className="hidden h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-mist-100 sm:block">
+                                                    {c.listing.images[0] ? (
+                                                        <img
+                                                            src={`/storage/${c.listing.images[0].path}`}
+                                                            alt=""
+                                                            className="h-full w-full object-cover"
+                                                        />
+                                                    ) : (
+                                                        <Package className="m-4 text-mist-300" size={24} />
                                                     )}
-                                                </div>
+                                                </span>
 
-                                                <p
-                                                    className={`mt-0.5 truncate text-sm ${
-                                                        unread > 0 ? 'font-semibold text-[#12291f]' : 'text-[#43554c]'
-                                                    }`}
-                                                >
-                                                    {conversation.last_message_preview ?? 'No messages yet'}
-                                                </p>
-
-                                                <p className="mt-0.5 truncate text-xs text-[#566860]">
-                                                    Re: {conversation.listing.title} ·{' '}
-                                                    {formatPrice(conversation.listing.price)}
-                                                </p>
-                                            </div>
-
-                                            <div className="hidden h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-[#E1E9E4] sm:block">
-                                                {cover ? (
-                                                    <img
-                                                        src={`/storage/${cover.path}`}
-                                                        alt=""
-                                                        className="h-full w-full object-cover"
-                                                    />
-                                                ) : (
-                                                    <ImagePlaceholder size={20} />
+                                                {unread && (
+                                                    <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-sun-500 px-1.5 text-xs font-extrabold text-pine-950">
+                                                        {c.unread_messages_count}
+                                                    </span>
                                                 )}
-                                            </div>
-                                        </Link>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                </div>
-            </div>
+                                            </Link>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        ) : (
+                            <p className="px-6 py-14 text-center text-sm text-ink-2">
+                                No conversations match your filters.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </Page>
         </AppLayout>
     );
 }

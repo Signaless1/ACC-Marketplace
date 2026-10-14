@@ -3,36 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Listing extends Model
 {
-    /** Input limits, shared by the create and update forms. */
-    public const TITLE_MIN = 3;
-    public const TITLE_MAX = 100;
-    public const DESCRIPTION_MIN = 10;
-    public const DESCRIPTION_MAX = 2000;
-    public const PRICE_MIN = 1;
-    public const PRICE_MAX = 999999.99;
-    public const QUANTITY_MIN = 1;
-    public const QUANTITY_MAX = 999;
-
-    public const CONDITIONS = ['New', 'Like New', 'Good', 'Fair', 'Used'];
-
-    /** Reasons a moderator can give when taking a listing down. */
-    public const REMOVAL_REASONS = [
-        'prohibited' => 'Prohibited item or service',
-        'misleading' => 'Misleading or inaccurate listing',
-        'scam' => 'Suspected scam or fraud',
-        'inappropriate' => 'Inappropriate content',
-        'duplicate' => 'Duplicate listing',
-        'spam' => 'Spam',
-        'wrong_category' => 'Wrong category',
-        'other' => 'Other',
-    ];
-
     protected $fillable = [
         'user_id',
         'category_id',
@@ -40,14 +17,33 @@ class Listing extends Model
         'slug',
         'description',
         'price',
-        'quantity',
         'type',
         'status',
         'condition',
+        'quantity',
         'hidden_at',
         'removed_reason',
         'removed_note',
         'removed_by',
+    ];
+
+    public const TYPES = ['item', 'service'];
+
+    public const CONDITIONS = ['New', 'Like New', 'Good', 'Fair', 'Used'];
+
+    public const MAX_IMAGES = 8;
+    public const MAX_PRICE = 999999.99;
+    public const MAX_QUANTITY = 999;
+
+    /** Reasons a moderator can give when removing a listing. */
+    public const REMOVAL_REASONS = [
+        'prohibited' => 'Prohibited item or service',
+        'scam' => 'Suspected scam or fraud',
+        'misleading' => 'Misleading title, photos or price',
+        'inappropriate' => 'Inappropriate content',
+        'duplicate' => 'Duplicate listing',
+        'spam' => 'Spam',
+        'other' => 'Other (see note)',
     ];
 
     protected function casts(): array
@@ -55,7 +51,68 @@ class Listing extends Model
         return [
             'hidden_at' => 'datetime',
             'quantity' => 'integer',
+            'price' => 'decimal:2',
         ];
+    }
+
+    protected $appends = ['removed_reason_label'];
+
+    protected function removedReasonLabel(): Attribute
+    {
+        return Attribute::get(
+            fn () => $this->removed_reason
+                ? (self::REMOVAL_REASONS[$this->removed_reason] ?? $this->removed_reason)
+                : null
+        );
+    }
+
+    public function isRemoved(): bool
+    {
+        return $this->hidden_at !== null;
+    }
+
+    /**
+     * Keep `status` consistent with stock and open orders:
+     * units left -> available; none left but orders open -> reserved; else sold.
+     */
+    public function syncStatus(): void
+    {
+        $hasOpenOrders = $this->orders()
+            ->whereIn('status', ['pending', 'confirmed'])
+            ->exists();
+
+        $status = $this->quantity > 0
+            ? 'available'
+            : ($hasOpenOrders ? 'reserved' : 'sold');
+
+        if ($this->status !== $status) {
+            $this->forceFill(['status' => $status])->save();
+        }
+    }
+
+    /**
+     * Everything a listing card needs: relations plus product rating,
+     * favourite count and sold units.
+     */
+    public function scopeForCards(Builder $query): Builder
+    {
+        return $query
+            ->with(['category:id,name', 'images', 'seller:id,name'])
+            ->withAvg('reviews as rating_avg', 'product_rating')
+            ->withCount([
+                'reviews as rating_count' => fn ($q) => $q->whereNotNull('product_rating'),
+                'favorites',
+            ]);
+    }
+
+    public function reviews(): HasMany
+    {
+        return $this->hasMany(Review::class);
+    }
+
+    public function remover(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'removed_by');
     }
 
     /**
@@ -67,27 +124,6 @@ class Listing extends Model
         return $query
             ->whereNull('hidden_at')
             ->whereHas('seller', fn ($q) => $q->whereNull('suspended_at'));
-    }
-
-    /**
-     * Adds `rating_average` and `rating_count` (product ratings only) so
-     * cards can show stars without loading every review.
-     */
-    public function scopeWithProductRating(Builder $query): Builder
-    {
-        return $query
-            ->withAvg(
-                ['reviews as rating_average' => fn ($q) => $q->whereNotNull('product_rating')],
-                'product_rating'
-            )
-            ->withCount(
-                ['reviews as rating_count' => fn ($q) => $q->whereNotNull('product_rating')]
-            );
-    }
-
-    public function reviews(): HasMany
-    {
-        return $this->hasMany(Review::class);
     }
 
     public function favorites(): HasMany

@@ -37,12 +37,15 @@ export const siteImages = {
     // Photo beside the "community / trust" section (students, a meet-up…)
     community: 'community.jpg',
 
-    // Wide banner at the top of the Marketplace page
-    marketplaceBanner: 'marketplace-banner.png',
-
-    // Banner beside the "Sell something" form (placeholder until you add it)
-    sellBanner: 'sell-banner.jpg',
-
     // Background photo on the left side of the login and register pages
     auth: 'acc_campus.png',
+
+    // Wide photo behind the greeting on the dashboard
+    dashboard: 'acc_campus.png',
+
+    // Photo beside the "Sell something" form
+    sell: 'sell-banner.jpg',
+
+    // Hero strip at the top of the marketplace page
+    marketplace: 'marketplace-banner.png',
 };
