@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Attachment;
 use App\Models\Message;
+use App\Models\Report;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -11,35 +12,47 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 class AttachmentController extends Controller
 {
     /**
-     * Serve a private chat attachment, but only to the two people in the
-     * conversation (and admins reviewing a reported transaction).
+     * Serve a private file, but only to the people who are allowed to see it:
+     *
+     *  - chat files: the two people in the conversation, unless the message
+     *    was deleted (then only admins reviewing a dispute can still open it);
+     *  - report evidence: whoever uploaded it, and admins.
      */
     public function show(Request $request, Attachment $attachment): BinaryFileResponse
     {
-        $message = $attachment->attachable;
-
-        abort_unless($message instanceof Message, 404);
-
-        $conversation = $message->conversation;
+        $owner = $attachment->attachable;
         $user = $request->user();
 
-        // A file the sender deleted for everyone, or that this person deleted
-        // for themselves, is gone for them even if they still know the URL.
-        // Admins can still open it: it may be evidence in a report.
-        if (! $user->isAdmin()) {
-            abort_if($message->deleted_for_everyone_at !== null, 404);
-            abort_if(
-                $message->hiddenBy()->where('users.id', $user->id)->exists(),
-                404
-            );
-        }
+        if ($owner instanceof Message) {
+            $conversation = $owner->conversation;
 
-        abort_unless(
-            $user->isAdmin()
-            || $conversation->buyer_id === $user->id
-            || $conversation->seller_id === $user->id,
-            403
-        );
+            abort_unless(
+                $user->isAdmin()
+                || $conversation->buyer_id === $user->id
+                || $conversation->seller_id === $user->id,
+                403
+            );
+
+            if (! $user->isAdmin()) {
+                // A deleted message must stop being reachable at once, even for
+                // someone who still has the file's address from before it was
+                // deleted: hiding the bubble alone would not be enough.
+                abort_if($owner->isDeletedForEveryone(), 404);
+
+                abort_if(
+                    $owner->deletions()->where('user_id', $user->id)->exists(),
+                    404
+                );
+            }
+        } elseif ($owner instanceof Report) {
+            abort_unless(
+                $user->isAdmin()
+                || ($attachment->user_id !== null && $attachment->user_id === $user->id),
+                403
+            );
+        } else {
+            abort(404);
+        }
 
         $disk = Storage::disk($attachment->disk);
 

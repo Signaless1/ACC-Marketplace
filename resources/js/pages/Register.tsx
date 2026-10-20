@@ -1,16 +1,11 @@
 import { Head, Link, useForm } from '@inertiajs/react';
 import { Check, Circle } from 'lucide-react';
-import { FormEvent, useState } from 'react';
+import { FormEvent } from 'react';
 import AuthLayout from '../Layouts/AuthLayout';
 import FormField, { textInputClass } from '../components/ui/FormField';
 import PasswordInput from '../components/ui/PasswordInput';
-import {
-    PH_PHONE_ERROR,
-    PH_PHONE_HINT,
-    PH_PHONE_PLACEHOLDER,
-    normalizePhPhone,
-    sanitizePhoneInput,
-} from '../lib/phone';
+import PhoneInput from '../components/ui/PhoneInput';
+import { normalizePhone } from '../lib/phone';
 
 function evaluate(password: string) {
     const checks = {
@@ -61,27 +56,16 @@ export default function Register() {
         form.data.password_confirmation !== '' &&
         form.data.password_confirmation !== form.data.password;
 
-    // Flag a bad number once the user leaves the field, not mid-typing.
-    const [phoneTouched, setPhoneTouched] = useState(false);
-    const phoneInvalid =
-        phoneTouched &&
-        form.data.phone !== '' &&
-        normalizePhPhone(form.data.phone) === null;
-
     function submit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
-
-        if (normalizePhPhone(form.data.phone) === null) {
-            setPhoneTouched(true);
-            form.setError('phone', PH_PHONE_ERROR);
-            return;
-        }
 
         form.transform((data) => ({
             ...data,
             name: data.name.trim().replace(/\s+/g, ' '),
             email: data.email.trim().toLowerCase(),
-            phone: normalizePhPhone(data.phone) ?? data.phone,
+            // The server accepts every spelling, but sending the canonical form
+            // keeps what we show ("saved as ...") identical to what is stored.
+            phone: normalizePhone(data.phone) ?? data.phone.trim(),
         }));
 
         form.post('/register', {
@@ -96,7 +80,7 @@ export default function Register() {
             asideTitle="Join the students already trading on campus."
             asidePoints={[
                 'List an item or service in a couple of minutes',
-                'Chat with buyers inside the app, no need to share your number',
+                'Chat with buyers inside the app. Your number stays private',
                 'Build a reputation with ratings and reviews',
             ]}
         >
@@ -149,40 +133,14 @@ export default function Register() {
                     />
                 </FormField>
 
-                <FormField
-                    id="phone"
-                    label="Mobile number"
-                    hint={PH_PHONE_HINT}
-                    error={
-                        form.errors.phone ??
-                        (phoneInvalid ? PH_PHONE_ERROR : undefined)
-                    }
-                >
-                    <input
-                        id="phone"
-                        type="tel"
-                        inputMode="numeric"
-                        autoComplete="tel-national"
-                        maxLength={13}
-                        value={form.data.phone}
-                        onBlur={() => setPhoneTouched(true)}
-                        onChange={(e) => {
-                            form.setData('phone', sanitizePhoneInput(e.target.value));
-                            if (form.errors.phone) form.clearErrors('phone');
-                        }}
-                        placeholder={PH_PHONE_PLACEHOLDER}
-                        aria-invalid={Boolean(form.errors.phone) || phoneInvalid}
-                        aria-describedby={
-                            form.errors.phone || phoneInvalid
-                                ? 'phone-error'
-                                : undefined
-                        }
-                        className={textInputClass(
-                            Boolean(form.errors.phone) || phoneInvalid,
-                        )}
-                        required
-                    />
-                </FormField>
+                <PhoneInput
+                    value={form.data.phone}
+                    onChange={(value) => {
+                        form.setData('phone', value);
+                        form.clearErrors('phone');
+                    }}
+                    error={form.errors.phone}
+                />
 
                 <FormField
                     id="password"

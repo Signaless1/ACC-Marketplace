@@ -10,6 +10,7 @@ use App\Models\Order;
 use App\Models\Report;
 use App\Models\Review;
 use App\Models\User;
+use App\Support\Chat;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -190,6 +191,35 @@ class DashboardController extends Controller
             ]);
         }
 
+        // Due process: if someone reported this person, they get to answer.
+        $awaitingResponse = Report::query()
+            ->where('reported_user_id', $uid)
+            ->whereIn('status', Report::OPEN_STATUSES)
+            ->whereNull('respondent_statement')
+            ->count();
+
+        if ($awaitingResponse > 0) {
+            $items->push([
+                'tone' => 'danger',
+                'title' => $awaitingResponse === 1
+                    ? 'A report was filed about you'
+                    : "{$awaitingResponse} reports were filed about you",
+                'text' => 'Tell your side before an administrator decides. You can add photos or screenshots.',
+                'href' => '/reports',
+                'cta' => 'Respond',
+            ]);
+        }
+
+        if (! $user->phone) {
+            $items->push([
+                'tone' => 'info',
+                'title' => 'Add your mobile number',
+                'text' => 'Every account needs a Philippine mobile number. It stays private and helps us keep the marketplace safe.',
+                'href' => '/settings',
+                'cta' => 'Add number',
+            ]);
+        }
+
         if ($stats['unread_messages'] > 0) {
             $n = $stats['unread_messages'];
             $items->push([
@@ -208,8 +238,8 @@ class DashboardController extends Controller
     {
         return \App\Models\Message::query()
             ->whereNull('read_at')
+            ->whereNull('deleted_for_everyone_at')
             ->where('sender_id', '!=', $uid)
-            ->liveFor($uid)
             ->whereHas('conversation', fn ($q) => $q
                 ->where('buyer_id', $uid)
                 ->orWhere('seller_id', $uid))
@@ -221,35 +251,40 @@ class DashboardController extends Controller
      */
     private function recentConversations(int $uid): Collection
     {
-        return Conversation::query()
+        $conversations = Conversation::query()
             ->where(fn ($q) => $q->where('buyer_id', $uid)->orWhere('seller_id', $uid))
-            ->with(['listing:id,title', 'listing.images', 'buyer:id,name', 'seller:id,name', 'latestMessage.attachments'])
+            ->with(['listing:id,title', 'listing.images', 'buyer:id,name', 'seller:id,name'])
             ->withMax('messages', 'created_at')
             ->withCount(['messages as unread_count' => fn ($q) => $q
                 ->whereNull('read_at')
-                ->where('sender_id', '!=', $uid)
-                ->liveFor($uid)])
+                ->whereNull('deleted_for_everyone_at')
+                ->where('sender_id', '!=', $uid)])
             ->has('messages')
             ->latest('messages_max_created_at')
             ->take(5)
-            ->get()
-            ->map(function ($c) use ($uid) {
-                $last = $c->latestMessage;
+            ->get();
 
-                return [
-                    'id' => $c->id,
-                    'other' => $c->buyer_id === $uid ? $c->seller?->name : $c->buyer?->name,
-                    'listing' => $c->listing?->title,
-                    'image' => $c->listing?->images->first()?->path,
-                    'preview' => $last?->deleted_for_everyone_at
-                        ? 'This message was deleted'
-                        : ($last?->body
-                            ? Str::limit($last->body, 70)
-                            : ($last && $last->attachments->isNotEmpty() ? 'Sent an attachment' : '')),
-                    'unread' => (int) $c->unread_count,
-                    'at' => $last?->created_at,
-                ];
-            });
+        // Newest message this person has not deleted for themselves (redacted
+        // if the sender deleted it for everyone).
+        Chat::attachLatestVisible($conversations, $uid);
+
+        return $conversations->map(function ($c) use ($uid) {
+            $last = $c->latestMessage;
+
+            return [
+                'id' => $c->id,
+                'other' => $c->buyer_id === $uid ? $c->seller?->name : $c->buyer?->name,
+                'listing' => $c->listing?->title,
+                'image' => $c->listing?->images->first()?->path,
+                'preview' => $last?->deleted
+                    ? 'This message was deleted'
+                    : ($last?->body
+                        ? Str::limit($last->body, 70)
+                        : ($last && $last->attachments->isNotEmpty() ? 'Sent an attachment' : '')),
+                'unread' => (int) $c->unread_count,
+                'at' => $last?->created_at,
+            ];
+        });
     }
 
     /**

@@ -26,6 +26,13 @@ const d = (seconds: number) => ({ '--d': `${seconds}s` }) as CSSProperties;
 const h2 =
     'font-display text-4xl font-extrabold leading-[1.02] tracking-[-0.025em] sm:text-5xl lg:text-6xl';
 
+/** The sections the header links to, in the order the links are shown. */
+const navLinks = [
+    { id: 'categories', label: 'Categories' },
+    { id: 'how', label: 'How it works' },
+    { id: 'trust', label: 'Safety' },
+];
+
 const categories = [
     {
         name: 'Electronics',
@@ -131,6 +138,13 @@ export default function Home() {
     const [scrolled, setScrolled] = useState(false);
     const [open, setOpen] = useState(0);
     const [slide, setSlide] = useState(0);
+
+    // The header link for the section you are in keeps its yellow underline until
+    // you move to another section. Clicking a link marks it at once and holds it
+    // while the page scrolls there, so it does not flicker through the sections
+    // in between.
+    const [active, setActive] = useState<string | null>(null);
+    const holdUntil = useRef(0);
     const Current = trust[slide].icon;
 
     // Scroll reveals. Only elements that start below the fold are hidden,
@@ -171,12 +185,53 @@ export default function Home() {
     }, []);
 
     useEffect(() => {
-        const onScroll = () => setScrolled(window.scrollY > 24);
+        // The "reading line" sits just under the fixed header.
+        const READING_LINE = 120;
+
+        const follow = () => {
+            if (Date.now() < holdUntil.current) return;
+
+            let current: string | null = null;
+
+            for (const { id } of navLinks) {
+                const section = document.getElementById(id);
+                if (!section) continue;
+
+                const box = section.getBoundingClientRect();
+                if (box.top <= READING_LINE && box.bottom > READING_LINE) {
+                    current = id;
+                    break;
+                }
+            }
+
+            // Only re-render when the section actually changes.
+            setActive((previous) => (previous === current ? previous : current));
+        };
+
+        const onScroll = () => {
+            setScrolled(window.scrollY > 24);
+            follow();
+        };
+
+        // The moment the person scrolls by hand, stop holding the clicked link.
+        const release = () => {
+            holdUntil.current = 0;
+        };
 
         onScroll();
         window.addEventListener('scroll', onScroll, { passive: true });
+        window.addEventListener('resize', onScroll);
+        window.addEventListener('wheel', release, { passive: true });
+        window.addEventListener('touchstart', release, { passive: true });
+        window.addEventListener('keydown', release);
 
-        return () => window.removeEventListener('scroll', onScroll);
+        return () => {
+            window.removeEventListener('scroll', onScroll);
+            window.removeEventListener('resize', onScroll);
+            window.removeEventListener('wheel', release);
+            window.removeEventListener('touchstart', release);
+            window.removeEventListener('keydown', release);
+        };
     }, []);
 
     return (
@@ -213,14 +268,16 @@ export default function Home() {
                         className="hidden items-center gap-9 text-[15px] font-medium text-white/80 md:flex"
                         aria-label="Sections"
                     >
-                        {[
-                            ['#categories', 'Categories'],
-                            ['#how', 'How it works'],
-                            ['#trust', 'Safety'],
-                        ].map(([href, label]) => (
+                        {navLinks.map(({ id, label }) => (
                             <a
-                                key={href}
-                                href={href}
+                                key={id}
+                                href={`#${id}`}
+                                aria-current={active === id ? 'location' : undefined}
+                                onClick={() => {
+                                    // Underline it now and keep it while the page scrolls there.
+                                    setActive(id);
+                                    holdUntil.current = Date.now() + 1200;
+                                }}
                                 className="nv transition hover:text-white"
                             >
                                 {label}

@@ -5,8 +5,10 @@ use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\ListingController;
 use App\Http\Controllers\MessageController;
+use App\Http\Controllers\PasswordResetController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AppealController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\LiveController;
@@ -28,6 +30,37 @@ Route::get('/login', function () {
 Route::get('/register', function () {
     return inertia('Register');
 })->middleware('guest')->name('register');
+
+// Forgot password: enter your email, open the link we send, choose a new password.
+// (Laravel counts every guest "throttle:N,M" route against one limit per IP, so this
+// matches the login's 10 a minute. Each account also gets at most one reset email a
+// minute from the password broker, which is what stops someone mail-bombing an inbox.)
+Route::middleware('guest')->group(function () {
+    Route::get('/forgot-password', [PasswordResetController::class, 'request'])
+        ->name('password.request');
+
+    Route::post('/forgot-password', [PasswordResetController::class, 'email'])
+        ->middleware('throttle:10,1')
+        ->name('password.email');
+
+    // The name "password.reset" is what Laravel's reset email links to.
+    Route::get('/reset-password/{token}', [PasswordResetController::class, 'form'])
+        ->name('password.reset');
+
+    Route::post('/reset-password', [PasswordResetController::class, 'update'])
+        ->middleware('throttle:10,1')
+        ->name('password.update');
+});
+
+// A suspended person cannot log in, so an appeal is filed from outside the app
+// with the account's own email and password.
+Route::get('/appeal', [AppealController::class, 'create'])
+    ->middleware('guest')
+    ->name('appeal');
+
+Route::post('/appeal', [AppealController::class, 'store'])
+    ->middleware('throttle:10,1')
+    ->name('appeal.store');
 
 Route::get('/marketplace', [MarketplaceController::class, 'index'])
     ->name('marketplace');
@@ -90,6 +123,7 @@ Route::middleware('auth')->group(function () {
         ->middleware('throttle:60,1')
         ->name('messages.store');
 
+    // Delete one of your own messages, for yourself or for everyone (?scope=me|everyone).
     Route::delete('/messages/{conversation}/{message}', [MessageController::class, 'destroy'])
         ->middleware('throttle:60,1')
         ->name('messages.destroy');
@@ -125,9 +159,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/orders/{order}/report', [TransactionReportController::class, 'show'])
         ->name('orders.report');
 
-    Route::post('/orders/{order}/report', [TransactionReportController::class, 'store'])
+    Route::post('/orders/{order}/report', [ReportController::class, 'storeOrder'])
         ->middleware('throttle:10,1')
         ->name('orders.report.store');
+
     /*
     |--------------------------------------------------------------------------
     | Reviews
@@ -184,6 +219,14 @@ Route::middleware('auth')->group(function () {
     Route::post('/users/{user}/report', [ReportController::class, 'storeUser'])
         ->middleware('throttle:10,1')
         ->name('reports.user');
+
+    // Reports you filed, and reports filed about you (where you can answer them).
+    Route::get('/reports', [ReportController::class, 'index'])
+        ->name('reports.index');
+
+    Route::post('/reports/{report}/respond', [ReportController::class, 'respond'])
+        ->middleware('throttle:10,1')
+        ->name('reports.respond');
 });
 
 /*
@@ -210,5 +253,8 @@ Route::middleware(['auth', 'admin'])
         Route::get('/orders', [AdminController::class, 'orders'])->name('orders');
 
         Route::get('/reports', [AdminController::class, 'reports'])->name('reports');
+        Route::get('/reports/{report}/case', [AdminController::class, 'reportCase'])->name('reports.case');
         Route::patch('/reports/{report}', [AdminController::class, 'updateReport'])->name('reports.update');
+
+        Route::post('/appeals/{appeal}', [AdminController::class, 'decideAppeal'])->name('appeals.decide');
     });

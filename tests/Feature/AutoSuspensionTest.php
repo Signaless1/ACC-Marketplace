@@ -3,9 +3,13 @@
 namespace Tests\Feature;
 
 use App\Models\Report;
+use App\Models\ReportEvent;
 use App\Models\User;
-use App\Support\AutoSuspension;
+use App\Support\ReportModeration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Inertia\Testing\AssertableInertia as Assert;
 use Tests\Concerns\CreatesMarketplaceData;
 use Tests\TestCase;
 
@@ -14,213 +18,443 @@ class AutoSuspensionTest extends TestCase
     use CreatesMarketplaceData;
     use RefreshDatabase;
 
-    private function report(User $reporter, User $target, array $overrides = []): Report
+    protected function setUp(): void
     {
-        return Report::create(array_merge([
+        parent::setUp();
+
+        Storage::fake('local');
+
+        // Pin every rule so these tests never depend on what is in .env.
+        config([
+            'marketplace.reports.auto_suspend_threshold' => 2,
+            'marketplace.reports.window_days' => 30,
+            'marketplace.reports.min_reporter_age_hours' => 0,
+            'marketplace.reports.daily_limit' => 50,
+        ]);
+    }
+
+    /** File a real report through the app, the way a person would. */
+    private function fileReport(User $reporter, User $target, array $data = [])
+    {
+        return $this->actingAs($reporter)->post("/users/{$target->id}/report", array_merge([
+            'reason' => 'scam',
+            'description' => 'They asked me to pay first and then stopped replying.',
+        ], $data));
+    }
+
+    /** Insert a report directly, for setting up situations that need a specific history. */
+    private function makeReport(User $reporter, User $target, array $attributes = []): Report
+    {
+        $report = new Report();
+        $report->forceFill(array_merge([
             'reporter_id' => $reporter->id,
             'reported_user_id' => $target->id,
             'reason' => 'scam',
+            'description' => 'This person asked me to pay before showing the item.',
             'status' => 'pending',
-        ], $overrides));
+        ], $attributes))->save();
+
+        return $report;
     }
 
-    public function test_threshold_is_never_below_two(): void
-    {
-        $this->assertSame(2, AutoSuspension::threshold());
+    // ---------------------------------------------------------------
+    // The rule itself
+    // ---------------------------------------------------------------
 
-        config(['moderation.auto_suspend_reports' => 1]);
-        $this->assertSame(2, AutoSuspension::threshold());
-
-        config(['moderation.auto_suspend_reports' => 5]);
-        $this->assertSame(5, AutoSuspension::threshold());
-    }
-
-    public function test_one_report_does_not_suspend(): void
+    public function test_two_different_people_reporting_suspends_the_account_automatically(): void
     {
         $target = User::factory()->create();
-        $this->report(User::factory()->create(), $target);
+        $one = User::factory()->create();
+        $two = User::factory()->create();
 
-        $this->assertFalse($target->fresh()->isSuspended());
-    }
+        $this->fileReport($one, $target)->assertSessionHas('success');
+        $this->assertFalse($target->fresh()->isSuspended(), 'One report must never be enough.');
 
-    public function test_second_report_from_a_different_person_suspends_automatically(): void
-    {
-        $target = User::factory()->create();
-        $this->report(User::factory()->create(), $target);
-        $this->report(User::factory()->create(), $target);
+        $this->fileReport($two, $target)->assertSessionHas('success');
 
-        $target->refresh();
+        $target = $target->fresh();
         $this->assertTrue($target->isSuspended());
+        $this->assertTrue($target->isAutoSuspended());
+        $this->assertSame('auto', $target->suspension_type);
         $this->assertStringContainsString('Automatically suspended', $target->suspension_reason);
-        $this->assertStringContainsString('2 different users', $target->suspension_reason);
+
+        // A suspended member is locked out immediately, and cannot log back in.
+        $this->actingAs($target)->get('/dashboard')->assertRedirect('/login');
+        auth()->logout();
+
+        $this->post('/login', ['email' => $target->email, 'password' => 'password'])
+            ->assertSessionHasErrors('email');
+        $this->assertGuest();
     }
 
-    public function test_one_person_reporting_twice_counts_once(): void
+    public function test_the_threshold_can_be_raised_but_never_lowered_below_two(): void
     {
-        $target = User::factory()->create();
-        $listing = $this->makeListing($target);
-        $reporter = User::factory()->create();
+        config(['marketplace.reports.auto_suspend_threshold' => 1]);
+        $this->assertSame(2, ReportModeration::threshold());
 
-        // Same person: a user report, then a listing report, then another listing.
-        $this->report($reporter, $target);
-        $this->report($reporter, $target, ['listing_id' => $listing->id]);
-        $this->report($reporter, $target, ['listing_id' => $listing->id, 'reason' => 'spam']);
+        config(['marketplace.reports.auto_suspend_threshold' => 0]);
+        $this->assertSame(2, ReportModeration::threshold());
+
+        config(['marketplace.reports.auto_suspend_threshold' => 3]);
+        $this->assertSame(3, ReportModeration::threshold());
+
+        // With the floor in force, a single report suspends nobody.
+        config(['marketplace.reports.auto_suspend_threshold' => 1]);
+        $target = User::factory()->create();
+        $this->fileReport(User::factory()->create(), $target);
 
         $this->assertFalse($target->fresh()->isSuspended());
-        $this->assertSame(1, AutoSuspension::reporterCount($target));
     }
 
-    public function test_dismissed_and_resolved_reports_do_not_count(): void
+    public function test_a_higher_threshold_needs_more_people(): void
     {
+        config(['marketplace.reports.auto_suspend_threshold' => 3]);
+
         $target = User::factory()->create();
 
-        $this->report(User::factory()->create(), $target, ['status' => 'dismissed']);
-        $this->report(User::factory()->create(), $target, ['status' => 'resolved']);
+        foreach (range(1, 2) as $i) {
+            $this->fileReport(User::factory()->create(), $target);
+        }
         $this->assertFalse($target->fresh()->isSuspended());
 
-        // One open report is still just one.
-        $this->report(User::factory()->create(), $target);
-        $this->assertFalse($target->fresh()->isSuspended());
-
-        $this->report(User::factory()->create(), $target);
+        $this->fileReport(User::factory()->create(), $target);
         $this->assertTrue($target->fresh()->isSuspended());
     }
 
-    public function test_reports_from_suspended_accounts_do_not_count(): void
+    public function test_the_same_person_reporting_twice_counts_once(): void
+    {
+        $seller = User::factory()->create();
+        $listing = $this->makeListing($seller);
+        $reporter = User::factory()->create();
+
+        $this->actingAs($reporter)->post("/listings/{$listing->id}/report", [
+            'reason' => 'scam',
+            'description' => 'The listing photos are stolen from another website.',
+        ])->assertSessionHas('success');
+
+        // A second, genuinely different report about the same seller.
+        $this->fileReport($reporter, $seller)->assertSessionHas('success');
+
+        $this->assertSame(2, Report::query()->count());
+        $this->assertSame(1, ReportModeration::qualifyingReporterCount($seller));
+        $this->assertFalse($seller->fresh()->isSuspended());
+    }
+
+    // ---------------------------------------------------------------
+    // Reports that do not count (they still reach the admins)
+    // ---------------------------------------------------------------
+
+    public function test_reports_without_details_or_evidence_do_not_count(): void
     {
         $target = User::factory()->create();
-        $banned = User::factory()->create(['suspended_at' => now()]);
 
-        $this->report($banned, $target);
-        $this->report(User::factory()->create(), $target);
+        $this->fileReport(User::factory()->create(), $target, ['description' => null]);
+        $this->fileReport(User::factory()->create(), $target, ['description' => null]);
 
+        $this->assertSame(2, Report::query()->count(), 'Both still reach the admins.');
+        $this->assertSame(0, ReportModeration::qualifyingReporterCount($target));
         $this->assertFalse($target->fresh()->isSuspended());
     }
 
-    public function test_admins_are_never_auto_suspended(): void
+    public function test_an_attached_file_counts_as_substance_even_without_a_long_description(): void
+    {
+        $target = User::factory()->create();
+
+        $this->fileReport(User::factory()->create(), $target, [
+            'description' => null,
+            'attachments' => [UploadedFile::fake()->create('screenshot.jpg', 100, 'image/jpeg')],
+        ])->assertSessionHasNoErrors();
+
+        $this->assertSame(1, ReportModeration::qualifyingReporterCount($target));
+        $this->assertFalse($target->fresh()->isSuspended());
+
+        $this->fileReport(User::factory()->create(), $target);
+
+        $this->assertTrue($target->fresh()->isSuspended());
+    }
+
+    public function test_vague_reasons_never_count_towards_a_suspension(): void
+    {
+        $seller = User::factory()->create();
+        $listing = $this->makeListing($seller);
+
+        $this->actingAs(User::factory()->create())->post("/listings/{$listing->id}/report", [
+            'reason' => 'duplicate',
+            'description' => 'This is the same listing posted three times.',
+        ])->assertSessionHas('success');
+
+        $this->fileReport(User::factory()->create(), $seller, [
+            'reason' => 'other',
+            'description' => 'Something about this person feels off to me.',
+        ])->assertSessionHas('success');
+
+        $this->assertSame(2, Report::query()->count());
+        $this->assertSame(0, ReportModeration::qualifyingReporterCount($seller));
+        $this->assertFalse($seller->fresh()->isSuspended());
+    }
+
+    public function test_dismissed_and_false_reports_do_not_count_but_upheld_ones_do(): void
+    {
+        $target = User::factory()->create();
+
+        $this->makeReport(User::factory()->create(), $target, ['status' => 'dismissed']);
+        $this->makeReport(User::factory()->create(), $target, ['status' => 'dismissed', 'bad_faith' => true]);
+        $this->assertSame(0, ReportModeration::qualifyingReporterCount($target));
+
+        // An upheld report is the strongest signal there is.
+        $this->makeReport(User::factory()->create(), $target, ['status' => 'resolved']);
+        $this->makeReport(User::factory()->create(), $target, ['status' => 'pending']);
+
+        $this->assertSame(2, ReportModeration::qualifyingReporterCount($target));
+        $this->assertSame('suspended', ReportModeration::evaluate($target));
+    }
+
+    public function test_reporters_must_be_in_good_standing(): void
+    {
+        $target = User::factory()->create();
+        $first = User::factory()->create();
+        $noPhone = User::factory()->withoutPhone()->create();
+
+        $this->fileReport($first, $target);
+        $this->fileReport($noPhone, $target);
+
+        // An account with no phone number on file is not counted...
+        $this->assertSame(1, ReportModeration::qualifyingReporterCount($target));
+        $this->assertFalse($target->fresh()->isSuspended());
+
+        // ...and neither is a reporter who has since been suspended themselves.
+        $first->forceFill(['suspended_at' => now(), 'suspension_type' => 'manual'])->save();
+        $this->assertSame(0, ReportModeration::qualifyingReporterCount($target));
+
+        $this->fileReport(User::factory()->create(), $target);
+        $this->assertFalse($target->fresh()->isSuspended());
+
+        $this->fileReport(User::factory()->create(), $target);
+        $this->assertTrue($target->fresh()->isSuspended());
+    }
+
+    public function test_brand_new_accounts_do_not_count_when_a_minimum_age_is_set(): void
+    {
+        config(['marketplace.reports.min_reporter_age_hours' => 24]);
+
+        $target = User::factory()->create();
+        $one = User::factory()->create();
+        $two = User::factory()->create();
+
+        // Two accounts made a minute ago cannot knock someone out together.
+        $this->fileReport($one, $target);
+        $this->fileReport($two, $target);
+
+        $this->assertSame(2, Report::query()->count());
+        $this->assertFalse($target->fresh()->isSuspended());
+
+        // Once the accounts have some age, the same reports carry weight.
+        User::query()->whereIn('id', [$one->id, $two->id])->update(['created_at' => now()->subDays(3)]);
+
+        $this->assertSame('suspended', ReportModeration::evaluate($target));
+        $this->assertTrue($target->fresh()->isAutoSuspended());
+    }
+
+    public function test_reports_outside_the_window_do_not_count(): void
+    {
+        $target = User::factory()->create();
+
+        $this->makeReport(User::factory()->create(), $target, ['created_at' => now()->subDays(40)]);
+        $this->makeReport(User::factory()->create(), $target);
+
+        $this->assertSame(1, ReportModeration::qualifyingReporterCount($target));
+        $this->assertNull(ReportModeration::evaluate($target));
+        $this->assertFalse($target->fresh()->isSuspended());
+    }
+
+    public function test_admins_are_never_suspended_by_reports(): void
     {
         $admin = $this->makeAdmin();
 
-        $this->report(User::factory()->create(), $admin);
-        $this->report(User::factory()->create(), $admin);
+        $this->fileReport(User::factory()->create(), $admin);
+        $this->fileReport(User::factory()->create(), $admin);
 
+        $this->assertSame(2, Report::query()->count());
         $this->assertFalse($admin->fresh()->isSuspended());
+        $this->assertNull(ReportModeration::evaluate($admin));
     }
 
-    public function test_an_existing_suspension_is_not_overwritten(): void
-    {
-        $target = User::factory()->create([
-            'suspended_at' => now()->subDay(),
-            'suspension_reason' => 'Manual: abusive messages',
-        ]);
+    // ---------------------------------------------------------------
+    // Not a weapon: disputes and retaliation
+    // ---------------------------------------------------------------
 
-        $this->report(User::factory()->create(), $target);
-        $this->report(User::factory()->create(), $target);
-
-        $this->assertSame('Manual: abusive messages', $target->fresh()->suspension_reason);
-    }
-
-    public function test_it_works_through_the_real_report_endpoints(): void
+    public function test_a_two_sided_dispute_never_suspends_either_person(): void
     {
         $seller = User::factory()->create();
-        $listing = $this->makeListing($seller);
+        $buyer = User::factory()->create();
+        $order = $this->makeOrder($this->makeListing($seller), $buyer, 'confirmed');
 
-        $this->actingAs(User::factory()->create())
-            ->post("/listings/{$listing->id}/report", ['reason' => 'scam'])
-            ->assertSessionHas('success');
+        $this->actingAs($buyer)->post("/orders/{$order->id}/report", [
+            'reason' => 'no_show',
+            'description' => 'The seller did not come to the agreed meeting place.',
+        ])->assertSessionHas('success');
+
+        $this->actingAs($seller)->post("/orders/{$order->id}/report", [
+            'reason' => 'no_show',
+            'description' => 'I waited at the agreed place and the buyer never came.',
+        ])->assertSessionHas('success');
+
+        $this->assertSame(2, Report::query()->count());
         $this->assertFalse($seller->fresh()->isSuspended());
-
-        $this->actingAs(User::factory()->create())
-            ->post("/users/{$seller->id}/report", ['reason' => 'harassment'])
-            ->assertSessionHas('success');
-
-        $this->assertTrue($seller->fresh()->isSuspended());
+        $this->assertFalse($buyer->fresh()->isSuspended());
     }
 
-    public function test_it_also_works_for_transaction_reports(): void
+    public function test_a_counter_report_does_not_count_against_someone_who_complained_first(): void
     {
         $seller = User::factory()->create();
-        $listing = $this->makeListing($seller);
-
         $buyerOne = User::factory()->create();
         $buyerTwo = User::factory()->create();
+        $buyerThree = User::factory()->create();
 
-        foreach ([$buyerOne, $buyerTwo] as $buyer) {
-            $order = $this->makeOrder($listing, $buyer);
-            $this->actingAs($buyer)->post("/orders/{$order->id}/report", [
-                'reason' => 'fraud',
-                'description' => 'The seller took the money and never showed up.',
-            ])->assertSessionHasNoErrors();
+        // The seller complained about buyerOne first...
+        $this->makeReport($seller, $buyerOne, ['created_at' => now()->subDay()]);
+        // ...and buyerOne's report back is retaliation, so it is set aside.
+        $this->makeReport($buyerOne, $seller);
+        $this->makeReport($buyerTwo, $seller);
+
+        $this->assertSame(1, ReportModeration::qualifyingReporterCount($seller));
+        $this->assertNull(ReportModeration::evaluate($seller));
+        $this->assertFalse($seller->fresh()->isSuspended());
+
+        // Another independent person is a different matter.
+        $this->makeReport($buyerThree, $seller);
+
+        $this->assertSame('suspended', ReportModeration::evaluate($seller));
+    }
+
+    // ---------------------------------------------------------------
+    // A precaution, not a verdict
+    // ---------------------------------------------------------------
+
+    public function test_dismissing_a_report_lifts_the_automatic_suspension(): void
+    {
+        $admin = $this->makeAdmin();
+        $target = User::factory()->create();
+        $one = User::factory()->create();
+        $two = User::factory()->create();
+
+        $this->fileReport($one, $target);
+        $this->fileReport($two, $target);
+        $this->assertTrue($target->fresh()->isAutoSuspended());
+
+        $report = Report::query()->where('reporter_id', $two->id)->firstOrFail();
+
+        $this->actingAs($admin)->patch("/admin/reports/{$report->id}", [
+            'status' => 'dismissed',
+            'decision_note' => 'The messages show a normal conversation.',
+        ])->assertSessionHas('success', fn ($message) => str_contains($message, 'lifted'));
+
+        $target = $target->fresh();
+        $this->assertFalse($target->isSuspended());
+        $this->assertNull($target->suspension_type);
+        $this->assertNull($target->suspension_reason);
+
+        $this->assertTrue(
+            ReportEvent::query()->where('report_id', $report->id)->where('event', 'auto_lifted')->exists()
+        );
+    }
+
+    public function test_an_admins_own_suspension_is_never_lifted_automatically(): void
+    {
+        $admin = $this->makeAdmin();
+        $target = User::factory()->create();
+        $one = User::factory()->create();
+        $two = User::factory()->create();
+
+        $this->actingAs($admin)->post("/admin/users/{$target->id}/suspend", ['reason' => 'Selling stolen goods.'])
+            ->assertSessionHas('success');
+        $this->assertSame('manual', $target->fresh()->suspension_type);
+
+        $first = $this->makeReport($one, $target);
+        $second = $this->makeReport($two, $target);
+
+        foreach ([$first, $second] as $report) {
+            $this->actingAs($admin)->patch("/admin/reports/{$report->id}", ['status' => 'dismissed']);
         }
 
-        $this->assertTrue($seller->fresh()->isSuspended());
+        $this->assertTrue($target->fresh()->isSuspended(), 'Only automatic suspensions are lifted automatically.');
     }
 
-    public function test_auto_suspended_user_is_logged_out_and_cannot_log_back_in(): void
+    public function test_confirming_an_automatic_suspension_makes_it_the_admins_decision(): void
     {
-        $target = User::factory()->create(['email' => 'bad@example.com', 'password' => 'password123']);
-        $this->report(User::factory()->create(), $target);
-        $this->report(User::factory()->create(), $target);
-
-        $this->actingAs($target->fresh())->get('/dashboard')->assertRedirect('/login');
-        $this->assertGuest();
-
-        $this->post('/login', ['email' => 'bad@example.com', 'password' => 'password123'])
-            ->assertSessionHasErrors('email');
-    }
-
-    public function test_admin_can_reinstate_an_auto_suspended_user(): void
-    {
+        $admin = $this->makeAdmin();
         $target = User::factory()->create();
-        $this->report(User::factory()->create(), $target);
-        $this->report(User::factory()->create(), $target);
+        $one = User::factory()->create();
+        $two = User::factory()->create();
+
+        $this->fileReport($one, $target);
+        $this->fileReport($two, $target);
+        $this->assertTrue($target->fresh()->isAutoSuspended());
+
+        $first = Report::query()->where('reporter_id', $one->id)->firstOrFail();
+        $second = Report::query()->where('reporter_id', $two->id)->firstOrFail();
+
+        $this->actingAs($admin)->patch("/admin/reports/{$first->id}", [
+            'status' => 'resolved',
+            'suspend_user' => true,
+            'suspension_reason' => 'Confirmed: asked buyers to pay before meeting.',
+        ])->assertSessionHas('success');
+
+        $target = $target->fresh();
+        $this->assertSame('manual', $target->suspension_type);
+        $this->assertSame('Confirmed: asked buyers to pay before meeting.', $target->suspension_reason);
+
+        // Dismissing the other report no longer matters: it is the admin's call now.
+        $this->actingAs($admin)->patch("/admin/reports/{$second->id}", ['status' => 'dismissed']);
+
         $this->assertTrue($target->fresh()->isSuspended());
+    }
 
-        $this->actingAs($this->makeAdmin())
-            ->post("/admin/users/{$target->id}/unsuspend")
-            ->assertSessionHas('success');
+    public function test_reinstating_someone_starts_the_count_again(): void
+    {
+        $admin = $this->makeAdmin();
+        $target = User::factory()->create();
 
+        $this->fileReport(User::factory()->create(), $target);
+        $this->fileReport(User::factory()->create(), $target);
+        $this->assertTrue($target->fresh()->isAutoSuspended());
+
+        $this->travel(1)->minutes();
+        $this->actingAs($admin)->post("/admin/users/{$target->id}/unsuspend")->assertSessionHas('success');
+
+        $target = $target->fresh();
+        $this->assertFalse($target->isSuspended());
+        $this->assertNotNull($target->reinstated_at);
+
+        // The two earlier reports no longer count: one new report is not enough...
+        $this->travel(1)->minutes();
+        $this->fileReport(User::factory()->create(), $target);
         $this->assertFalse($target->fresh()->isSuspended());
+        $this->assertSame(1, ReportModeration::qualifyingReporterCount($target->fresh()));
+
+        // ...but two new, independent ones are.
+        $this->travel(1)->minutes();
+        $this->fileReport(User::factory()->create(), $target);
+        $this->assertTrue($target->fresh()->isAutoSuspended());
     }
 
-    public function test_higher_configured_threshold_is_respected(): void
-    {
-        config(['moderation.auto_suspend_reports' => 3]);
-        $target = User::factory()->create();
-
-        $this->report(User::factory()->create(), $target);
-        $this->report(User::factory()->create(), $target);
-        $this->assertFalse($target->fresh()->isSuspended());
-
-        $this->report(User::factory()->create(), $target);
-        $this->assertTrue($target->fresh()->isSuspended());
-    }
-
-    public function test_reporter_who_triggers_suspension_gets_a_popup_not_a_404(): void
+    public function test_the_audit_trail_records_what_the_algorithm_did(): void
     {
         $target = User::factory()->create();
-        $this->report(User::factory()->create(), $target);
-        $reporter = User::factory()->create();
 
-        $this->actingAs($reporter)
-            ->from("/users/{$target->id}")
-            ->post("/users/{$target->id}/report", ['reason' => 'scam'])
-            ->assertRedirect(route('dashboard'))
-            ->assertSessionHas('suspended', ['name' => $target->name]);
+        $this->fileReport(User::factory()->create(), $target);
+        $this->fileReport(User::factory()->create(), $target);
 
-        $this->assertTrue($target->fresh()->isSuspended());
-    }
+        $this->assertSame(2, ReportEvent::query()->where('event', 'filed')->count());
+        $this->assertSame(2, ReportEvent::query()->where('event', 'auto_suspended')->count());
 
-    public function test_visiting_a_suspended_profile_redirects_with_a_popup_for_users_but_not_admins(): void
-    {
-        $target = User::factory()->create(['suspended_at' => now()]);
-
-        $this->actingAs(User::factory()->create())
-            ->get("/users/{$target->id}")
-            ->assertRedirect(route('dashboard'))
-            ->assertSessionHas('suspended', ['name' => $target->name]);
-
-        $admin = User::factory()->create(['role' => 'admin']);
-        $this->actingAs($admin)->get("/users/{$target->id}")->assertOk();
+        $this->actingAs($this->makeAdmin())->get('/admin/reports?status=all')
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('Admin/Reports')
+                ->where('autoSuspend.threshold', 2)
+                ->where('reports.data.0.qualifying_reports', 2)
+                ->where('reports.data.0.reported_user.suspension_type', 'auto')
+                ->where('reports.data.0.reporter_standing.filed', 1));
     }
 }

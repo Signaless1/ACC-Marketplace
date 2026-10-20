@@ -1828,7 +1828,10 @@ html { scroll-behavior: smooth; }
   transform-origin: right;
   transition: transform 0.35s var(--ease);
 }
-.nv:hover::after { transform: scaleX(1); transform-origin: left; }
+/* The link for the section you are in keeps its underline (set by Home.tsx). */
+.nv[aria-current='location'] { color: #fff; }
+.nv:hover::after,
+.nv[aria-current='location']::after { transform: scaleX(1); transform-origin: left; }
 
 /* Scroll reveals. JS only hides elements that start below the fold. */
 .rv-hide { opacity: 0; }

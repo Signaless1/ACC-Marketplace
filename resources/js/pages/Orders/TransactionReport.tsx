@@ -1,9 +1,12 @@
 import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Flag, Printer, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Ban, Flag, Printer, Scale, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
+import { useFilePicker } from '../../components/ui/Attachments';
+import EvidenceField from '../../components/ui/EvidenceField';
 import { Page } from '../../components/ui/PageHeader';
 import StatusBadge from '../../components/ui/StatusBadge';
+import { formatPhone } from '../../lib/phone';
 import { formatDateTime, formatPrice } from '../../types/shared';
 
 interface Props {
@@ -30,8 +33,10 @@ interface Props {
             removed: boolean;
             removed_reason: string | null;
         } | null;
-        buyer: { id: number; name: string; email: string; member_since: string };
-        seller: { id: number; name: string; email: string; member_since: string };
+        // Contact details are limited to what the reader may see: your own email,
+        // never the other person's, and phone numbers only for admins.
+        buyer: { id: number; name: string; email: string | null; member_since: string; phone?: string | null };
+        seller: { id: number; name: string; email: string | null; member_since: string; phone?: string | null };
         timeline: { label: string; at: string; by: string | null; note?: string | null }[];
         messages: {
             id: number;
@@ -39,8 +44,9 @@ interface Props {
             role: 'buyer' | 'seller';
             body: string | null;
             at: string;
-            /** The sender deleted it for everyone. Only admins receive its content. */
+            /** Deleted for everyone. Only admins still get the original text. */
             deleted: boolean;
+            deleted_at: string | null;
             attachments: { name: string; kind: string; size: string }[];
         }[];
         reports: {
@@ -49,16 +55,27 @@ interface Props {
             reason: string;
             description: string | null;
             status: string;
+            outcome: string | null;
             filed_at: string;
+            /** The reported person's side of the story. */
+            response: string | null;
+            responded_at: string | null;
             escalated_to: string | null;
             escalated_at: string | null;
+            /** Shown to both people once the report is decided. */
+            decision_note: string | null;
+            /** Admins only. */
             admin_note: string | null;
         }[];
     };
     reasons: Record<string, string>;
     viewerRole: 'buyer' | 'seller' | 'admin';
     canSubmit: boolean;
+    /** Why this person cannot file another report right now, if they cannot. */
+    blockedReason: string | null;
     openReport: { id: number; status: string; reason: string; created_at: string } | null;
+    /** A report the OTHER side filed about this transaction. */
+    reportAgainstMe: { id: number; status: string; responded: boolean } | null;
 }
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
@@ -81,25 +98,42 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     );
 }
 
-export default function TransactionReport({ summary, reasons, viewerRole, canSubmit, openReport }: Props) {
+export default function TransactionReport({
+    summary,
+    reasons,
+    viewerRole,
+    canSubmit,
+    blockedReason,
+    openReport,
+    reportAgainstMe,
+}: Props) {
     const [reason, setReason] = useState('');
     const [description, setDescription] = useState('');
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [processing, setProcessing] = useState(false);
+    const picker = useFilePicker(5, 'review');
+
+    const isAdmin = viewerRole === 'admin';
+    const attachmentError = Object.entries(errors).find(([key]) => key.startsWith('attachments'))?.[1];
 
     const submit = () =>
         router.post(
             `/orders/${summary.order.id}/report`,
-            { reason, description },
+            { reason, description: description.trim(), attachments: picker.files },
             {
+                forceFormData: true,
                 preserveScroll: true,
-                onStart: () => setProcessing(true),
+                onStart: () => {
+                    setProcessing(true);
+                    setErrors({});
+                },
                 onFinish: () => setProcessing(false),
                 onError: (e) => setErrors(e),
                 onSuccess: () => {
                     setReason('');
                     setDescription('');
                     setErrors({});
+                    picker.clear();
                 },
             },
         );
@@ -197,7 +231,8 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
                                         <div key={role as string} className="rounded-xl bg-mist-50 p-4 ring-1 ring-mist-200 print:bg-white">
                                             <p className="text-[11px] font-bold uppercase tracking-wide text-ink-3">{role as string}</p>
                                             <p className="mt-1 font-display text-base font-extrabold text-pine-950">{p.name}</p>
-                                            <p className="text-sm text-ink-2">{p.email}</p>
+                                            <p className="text-sm text-ink-2">{p.email ?? 'Email kept private'}</p>
+                                            {p.phone && <p className="text-sm text-ink-2">{formatPhone(p.phone)}</p>}
                                             <p className="text-xs text-ink-3">Member since {formatDateTime(p.member_since)}</p>
                                         </div>
                                     );
@@ -232,13 +267,37 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
                                         <li key={r.id} className="rounded-xl border border-mist-200 p-4 text-sm">
                                             <div className="flex flex-wrap items-center justify-between gap-2">
                                                 <p className="font-bold text-ink">{r.reason}</p>
-                                                <StatusBadge status={r.status} />
+                                                <span className="flex items-center gap-2">
+                                                    {r.outcome && <span className="text-xs font-bold text-ink-2">{r.outcome}</span>}
+                                                    <StatusBadge status={r.status} />
+                                                </span>
                                             </div>
                                             <p className="text-xs text-ink-3">
                                                 Filed by {r.reporter} · {formatDateTime(r.filed_at)}
                                             </p>
                                             {r.description && (
                                                 <p className="mt-2 whitespace-pre-line text-ink-2">{r.description}</p>
+                                            )}
+                                            {r.response ? (
+                                                <div className="mt-3 rounded-lg bg-mist-50 p-3 print:bg-white print:ring-1 print:ring-black/10">
+                                                    <p className="text-[11px] font-bold uppercase tracking-wide text-ink-3">
+                                                        Response from the other party
+                                                        {r.responded_at && ` · ${formatDateTime(r.responded_at)}`}
+                                                    </p>
+                                                    <p className="mt-1 whitespace-pre-line text-ink-2">{r.response}</p>
+                                                </div>
+                                            ) : (
+                                                r.status !== 'resolved' &&
+                                                r.status !== 'dismissed' && (
+                                                    <p className="mt-2 text-xs italic text-ink-3">
+                                                        The other party has not responded yet.
+                                                    </p>
+                                                )
+                                            )}
+                                            {r.decision_note && (
+                                                <p className="mt-3 text-sm text-ink">
+                                                    <strong>Decision:</strong> {r.decision_note}
+                                                </p>
                                             )}
                                             {r.escalated_to && (
                                                 <p className="mt-2 text-xs font-semibold text-violet-800">
@@ -265,14 +324,18 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
                                             <p className="text-xs text-ink-3">
                                                 <strong className="text-ink">{m.sender}</strong> ({m.role}) ·{' '}
                                                 {formatDateTime(m.at)}
-                                                {m.deleted && (
-                                                    <span className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700 print:bg-white print:ring-1 print:ring-red-300">
-                                                        {viewerRole === 'admin' ? 'Deleted by sender' : 'Deleted'}
-                                                    </span>
-                                                )}
                                             </p>
-                                            {m.deleted && viewerRole !== 'admin' && (
-                                                <p className="mt-0.5 text-xs italic text-ink-3">This message was deleted.</p>
+                                            {m.deleted && !isAdmin && (
+                                                <p className="mt-0.5 flex items-center gap-1.5 text-xs italic text-ink-3">
+                                                    <Ban size={13} /> This message was deleted by its sender.
+                                                </p>
+                                            )}
+                                            {m.deleted && isAdmin && (
+                                                <p className="mt-0.5 flex items-center gap-1.5 text-xs font-bold text-red-700">
+                                                    <Ban size={13} /> Deleted for everyone by the sender
+                                                    {m.deleted_at && ` on ${formatDateTime(m.deleted_at)}`}
+                                                    {m.body ? ' (original text shown to admins only)' : ' (content already purged)'}
+                                                </p>
                                             )}
                                             {m.body && (
                                                 <p className="mt-0.5 whitespace-pre-wrap break-words rounded-lg bg-mist-50 px-3 py-2 text-ink print:bg-white print:ring-1 print:ring-black/10">
@@ -310,6 +373,24 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
 
                     {/* Reporting panel (hidden when printing) */}
                     <aside className="space-y-5 xl:sticky xl:top-[92px] print:hidden order-first xl:order-last">
+                        {reportAgainstMe && (
+                            <div className="ui-card border-sun-500/60 p-6">
+                                <p className="flex items-center gap-2 font-display text-base font-extrabold text-pine-950">
+                                    <Scale size={17} className="text-sun-700" /> The other person reported this
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-ink-2">
+                                    {reportAgainstMe.responded
+                                        ? 'You have given your side. An administrator will read both before deciding.'
+                                        : 'You have the right to answer before an administrator decides. Add your side of what happened, and any photos or screenshots that help.'}
+                                </p>
+                                {!reportAgainstMe.responded && (
+                                    <Link href="/reports" className="ui-btn ui-btn-primary ui-btn-sm mt-4">
+                                        Give my side
+                                    </Link>
+                                )}
+                            </div>
+                        )}
+
                         {viewerRole === 'admin' ? (
                             <div className="ui-card p-6">
                                 <p className="flex items-center gap-2 font-display text-base font-extrabold text-pine-950">
@@ -332,6 +413,20 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
                                     The admins have this transaction on file ({reasons[openReport.reason] ?? openReport.reason}).
                                     Current status: <StatusBadge status={openReport.status} />
                                 </p>
+                                <p className="mt-2 text-[13px] leading-relaxed text-ink-3">
+                                    The other person has been told and can give their side. An administrator reads
+                                    both before deciding.
+                                </p>
+                                <Link href="/reports" className="ui-btn ui-btn-outline ui-btn-sm mt-4">
+                                    Follow my reports
+                                </Link>
+                            </div>
+                        ) : blockedReason ? (
+                            <div className="ui-card p-6">
+                                <p className="flex items-center gap-2 font-display text-base font-extrabold text-pine-950">
+                                    <Flag size={17} className="text-sun-700" /> Reporting unavailable
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-ink-2">{blockedReason}</p>
                             </div>
                         ) : canSubmit ? (
                             <div className="ui-card p-6">
@@ -340,7 +435,13 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
                                 </h2>
                                 <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">
                                     This sends the document on the left to the marketplace admins, who can escalate
-                                    it to the school office if needed.
+                                    it to the school office if needed. The other person is told and can give their
+                                    side before anything is decided.
+                                </p>
+                                <p className="mt-3 flex items-start gap-2 rounded-xl bg-sun-300/25 px-3 py-2.5 text-[12.5px] leading-relaxed text-pine-950 ring-1 ring-sun-400/40">
+                                    <Scale size={15} className="mt-0.5 shrink-0 text-sun-700" />
+                                    Only report what really happened. Knowingly false reports can lead to limits on
+                                    your own account.
                                 </p>
 
                                 <div className="mt-4 space-y-4">
@@ -376,6 +477,8 @@ export default function TransactionReport({ summary, reasons, viewerRole, canSub
                                             <span>{description.length}/2000</span>
                                         </div>
                                     </div>
+
+                                    <EvidenceField picker={picker} error={attachmentError} disabled={processing} />
 
                                     <button
                                         type="button"

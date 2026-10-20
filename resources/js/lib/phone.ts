@@ -1,34 +1,94 @@
 /**
- * Philippine mobile numbers. Mirrors app/Support/PhilippinePhone.php.
+ * Philippine mobile numbers, mirrored from App\Support\PhoneNumber on the
+ * server. The server is the one that decides; this only gives people instant
+ * feedback while they type, so keep the two in step.
  *
- * Accepted: 09XXXXXXXXX (11 digits), +639XXXXXXXXX or 639XXXXXXXXX.
+ * Accepted: 0917 123 4567, +63 917 123 4567, 639171234567, 9171234567 ...
+ * Stored:   +639171234567
  */
 
-export const PH_PHONE_PLACEHOLDER = '09171234567';
-export const PH_PHONE_HINT = '11 digits starting with 09, e.g. 09171234567 (+63 9XX XXX XXXX also works).';
-export const PH_PHONE_ERROR =
-    'Enter a valid Philippine mobile number: 11 digits starting with 09, or +63 followed by 10 digits.';
+const MOBILE = /^(?:\+63|63|0)?(9\d{9})$/;
 
-/** Keep only what can belong to a PH number while the user types. */
-export function sanitizePhoneInput(raw: string): string {
-    const plus = raw.trimStart().startsWith('+');
-    const digits = raw.replace(/\D/g, '');
+/** The 10 digits after the country code (917 123 4567), or null if it is not a mobile number. */
+export function nationalDigits(input: string): string | null {
+    const compact = input.trim().replace(/[\s\u00A0().-]/g, '');
+    const match = MOBILE.exec(compact);
 
-    // 09XXXXXXXXX = 11 digits, 639XXXXXXXXX = 12 digits.
-    const max = plus || digits.startsWith('63') ? 12 : 11;
+    if (!match) return null;
 
-    return (plus ? '+' : '') + digits.slice(0, max);
+    // Placeholders such as 0900 000 0000 or 0999 999 9999.
+    if (/^9(\d)\1{8}$/.test(match[1])) return null;
+
+    return match[1];
 }
 
-/** The stored form (09XXXXXXXXX), or null when the number is not valid. */
-export function normalizePhPhone(raw: string): string | null {
-    const value = raw.trim();
-    if (!/^\+?[\d\s().-]+$/.test(value)) return null;
+/** +639171234567, or null if the input is not a Philippine mobile number. */
+export function normalizePhone(input: string): string | null {
+    const digits = nationalDigits(input);
 
+    return digits ? `+63${digits}` : null;
+}
+
+/** 0917 123 4567 - how a Filipino reader expects to see the number. */
+export function formatPhone(canonical: string | null | undefined): string {
+    if (!canonical) return '';
+
+    const match = /^\+63(9\d{2})(\d{3})(\d{4})$/.exec(canonical);
+
+    return match ? `0${match[1]} ${match[2]} ${match[3]}` : canonical;
+}
+
+/** Split digits into groups, e.g. ("9171234567", [3, 3, 4]) -> "917 123 4567". */
+function group(digits: string, sizes: number[]): string {
+    const parts: string[] = [];
+    let at = 0;
+
+    for (const size of sizes) {
+        if (at >= digits.length) break;
+        parts.push(digits.slice(at, at + size));
+        at += size;
+    }
+
+    return parts.join(' ');
+}
+
+/**
+ * Shapes what is typed into a Philippine mobile number and stops it at the
+ * real length, so extra digits are simply not accepted:
+ *
+ *   0917 123 4567      11 digits (starts with 0)
+ *   +63 917 123 4567   12 digits after the "+" (63 + 10)
+ *   63 917 123 4567    12 digits
+ *   917 123 4567       10 digits
+ *
+ * Letters and symbols are dropped, the number is spaced as it is typed, and
+ * pasting any usual format works. The server still validates everything.
+ */
+export function sanitizePhoneInput(value: string): string {
+    const plus = value.trimStart().startsWith('+');
     const digits = value.replace(/\D/g, '');
 
-    if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
-    if (value.startsWith('+')) return null;
+    // +63 917 123 4567 or 63 917 123 4567
+    if (plus || digits.startsWith('63')) {
+        const capped = digits.slice(0, 12);
+        const country = capped.slice(0, 2);
+        const national = group(capped.slice(2), [3, 3, 4]);
 
-    return /^09\d{9}$/.test(digits) ? digits : null;
+        return `${plus ? '+' : ''}${country}${national ? ` ${national}` : ''}`;
+    }
+
+    // 0917 123 4567
+    if (digits.startsWith('0')) return group(digits.slice(0, 11), [4, 3, 4]);
+
+    // 917 123 4567
+    return group(digits.slice(0, 10), [3, 3, 4]);
+}
+
+/** An error message for the field, or null when the number is fine (or not entered yet). */
+export function phoneError(value: string): string | null {
+    if (value.trim() === '') return null;
+
+    return normalizePhone(value)
+        ? null
+        : 'Enter a Philippine mobile number, like 0917 123 4567 or +63 917 123 4567.';
 }

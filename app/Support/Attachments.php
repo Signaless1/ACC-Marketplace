@@ -68,8 +68,9 @@ class Attachments
      * Save uploaded files and attach them to a model.
      *
      * @param  array<int, UploadedFile>  $files
+     * @param  int|null  $userId  who uploaded them (report evidence is only shown to its uploader and admins)
      */
-    public static function store(Model $owner, array $files, string $disk, string $directory): void
+    public static function store(Model $owner, array $files, string $disk, string $directory, ?int $userId = null): void
     {
         foreach ($files as $file) {
             if (! $file instanceof UploadedFile) {
@@ -79,6 +80,7 @@ class Attachments
             $mime = $file->getMimeType() ?: 'application/octet-stream';
 
             $owner->attachments()->create([
+                'user_id' => $userId,
                 'disk' => $disk,
                 'path' => $file->store($directory, $disk),
                 // Strip any path pieces and control characters from the display name.

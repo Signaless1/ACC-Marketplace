@@ -5,14 +5,8 @@ import AppLayout from '../../Layouts/AppLayout';
 import Avatar from '../../components/ui/Avatar';
 import PageHeader, { Page } from '../../components/ui/PageHeader';
 import PasswordInput from '../../components/ui/PasswordInput';
-import {
-    PH_PHONE_ERROR,
-    PH_PHONE_HINT,
-    PH_PHONE_PLACEHOLDER,
-    normalizePhPhone,
-    sanitizePhoneInput,
-} from '../../lib/phone';
 import type { SharedProps } from '../../types/shared';
+import { formatPhone, normalizePhone, phoneError, sanitizePhoneInput } from '../../lib/phone';
 
 function FieldError({ message }: { message?: string }) {
     return message ? <p role="alert" className="ui-error">{message}</p> : null;
@@ -29,25 +23,29 @@ export default function Edit() {
 
     const profile = useForm<{ name: string; phone: string; bio: string; avatar: File | null; remove_avatar: boolean }>({
         name: user.name,
-        phone: user.phone ?? '',
+        phone: formatPhone(user.phone),
         bio: user.bio ?? '',
         avatar: null,
         remove_avatar: false,
     });
+
+    const phoneProblem = phoneError(profile.data.phone) ?? profile.errors.phone;
 
     const password = useForm({ current_password: '', password: '', password_confirmation: '' });
 
     const submitProfile = (event: FormEvent) => {
         event.preventDefault();
 
-        // Empty is fine only for accounts that never added a number.
-        if (
-            (profile.data.phone !== '' || user.phone) &&
-            normalizePhPhone(profile.data.phone) === null
-        ) {
-            profile.setError('phone', PH_PHONE_ERROR);
-            return;
-        }
+        profile.transform((data) => {
+            const { phone, ...rest } = data;
+
+            // An older account with no number yet can still save its name and
+            // bio: leave the field out until they choose to add one.
+            if (phone.trim() === '' && !user.phone) return rest;
+
+            // Canonical form, so what is saved matches what we show.
+            return { ...rest, phone: normalizePhone(phone) ?? phone.trim() };
+        });
 
         // Multipart upload requires POST (PHP does not parse PUT bodies).
         profile.post('/settings/profile', {
@@ -143,22 +141,24 @@ export default function Edit() {
                             <input
                                 id="phone"
                                 type="tel"
-                                inputMode="numeric"
-                                autoComplete="tel-national"
-                                maxLength={13}
-                                className={`ui-input ${profile.errors.phone ? 'ui-input-error' : ''}`}
+                                inputMode="tel"
+                                autoComplete="tel"
+                                maxLength={20}
+                                className={`ui-input ${phoneProblem ? 'ui-input-error' : ''}`}
                                 value={profile.data.phone}
                                 onChange={(e) => {
                                     profile.setData('phone', sanitizePhoneInput(e.target.value));
-                                    if (profile.errors.phone) profile.clearErrors('phone');
+                                    profile.clearErrors('phone');
                                 }}
-                                placeholder={PH_PHONE_PLACEHOLDER}
+                                placeholder="0917 123 4567"
+                                aria-invalid={Boolean(phoneProblem)}
                             />
-                            {profile.errors.phone ? (
-                                <FieldError message={profile.errors.phone} />
-                            ) : (
-                                <p className="mt-1 text-xs text-ink-3">
-                                    {PH_PHONE_HINT} Only you and the admins can see it.
+                            <FieldError message={phoneProblem ?? undefined} />
+                            {!phoneProblem && (
+                                <p className="ui-hint mt-1">
+                                    {user.phone
+                                        ? 'A Philippine mobile number. It stays private: other members never see it.'
+                                        : 'Add your Philippine mobile number. It stays private: other members never see it.'}
                                 </p>
                             )}
                         </div>

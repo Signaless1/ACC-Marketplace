@@ -4,19 +4,19 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\Report;
+use App\Support\ReportModeration;
 use App\Support\TransactionSummary;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class TransactionReportController extends Controller
 {
     /**
-     * The compiled transaction document (printable) plus the form to
-     * report it to the marketplace admins.
+     * The compiled transaction document (printable) plus the form to report it
+     * to the marketplace admins. Filing the report itself is handled by
+     * ReportController::storeOrder, shared with listing and user reports.
      */
     public function show(Request $request, Order $order): Response
     {
@@ -24,69 +24,45 @@ class TransactionReportController extends Controller
 
         $user = $request->user();
 
+        $role = $user->isAdmin()
+            ? 'admin'
+            : ($order->buyer_id === $user->id ? 'buyer' : 'seller');
+
         $openReport = Report::query()
             ->where('order_id', $order->id)
             ->where('reporter_id', $user->id)
-            ->whereIn('status', ['pending', 'reviewing', 'escalated'])
+            ->whereIn('status', Report::OPEN_STATUSES)
             ->latest()
             ->first(['id', 'status', 'reason', 'created_at']);
 
+        // A report the OTHER side filed about this transaction: they are owed an
+        // answer, so point them to where they can give it.
+        $reportAgainstMe = $user->isAdmin()
+            ? null
+            : Report::query()
+                ->where('order_id', $order->id)
+                ->where('reported_user_id', $user->id)
+                ->whereIn('status', Report::OPEN_STATUSES)
+                ->latest()
+                ->first(['id', 'status', 'respondent_statement']);
+
+        $blockedReason = $user->isAdmin() ? null : ReportModeration::blockedFromReporting($user);
+
         return Inertia::render('Orders/TransactionReport', [
             'summary' => TransactionSummary::for($order, $user),
-            'reasons' => Report::TRANSACTION_REASONS,
-            'viewerRole' => $user->isAdmin()
-                ? 'admin'
-                : ($order->buyer_id === $user->id ? 'buyer' : 'seller'),
-            'canSubmit' => ! $user->isAdmin() && $openReport === null,
+            // Each side is offered the reasons that make sense for their role.
+            'reasons' => $role === 'admin'
+                ? Report::TRANSACTION_REASONS
+                : Report::transactionReasonsFor($role),
+            'viewerRole' => $role,
+            'canSubmit' => ! $user->isAdmin() && $openReport === null && $blockedReason === null,
+            'blockedReason' => $blockedReason,
             'openReport' => $openReport,
+            'reportAgainstMe' => $reportAgainstMe ? [
+                'id' => $reportAgainstMe->id,
+                'status' => $reportAgainstMe->status,
+                'responded' => $reportAgainstMe->respondent_statement !== null,
+            ] : null,
         ]);
-    }
-
-    public function store(Request $request, Order $order): RedirectResponse
-    {
-        Gate::authorize('report', $order);
-
-        $user = $request->user();
-
-        if ($user->isAdmin()) {
-            return back()->with('error', 'Admins review reports from the Reports page.');
-        }
-
-        $validated = $request->validate([
-            'reason' => ['required', Rule::in(array_keys(Report::TRANSACTION_REASONS))],
-            'description' => ['required', 'string', 'min:20', 'max:2000'],
-        ], [
-            'description.required' => 'Describe what happened so the admins can investigate.',
-            'description.min' => 'Please give a little more detail (at least 20 characters).',
-        ]);
-
-        $alreadyOpen = Report::query()
-            ->where('order_id', $order->id)
-            ->where('reporter_id', $user->id)
-            ->whereIn('status', ['pending', 'reviewing', 'escalated'])
-            ->exists();
-
-        if ($alreadyOpen) {
-            return back()->with('error', 'You already have an open report for this transaction.');
-        }
-
-        $otherPartyId = $order->buyer_id === $user->id
-            ? $order->seller_id
-            : $order->buyer_id;
-
-        Report::create([
-            'reporter_id' => $user->id,
-            'order_id' => $order->id,
-            'listing_id' => $order->listing_id,
-            'reported_user_id' => $otherPartyId,
-            'reason' => $validated['reason'],
-            'description' => $validated['description'],
-            'status' => 'pending',
-        ]);
-
-        return back()->with(
-            'success',
-            'Transaction report sent to the admins. You can also print or save it as a PDF below.'
-        );
     }
 }
