@@ -1,114 +1,168 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# ACC Marketplace
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A student marketplace for the ACC community.
 
-## About Laravel
+ACC Marketplace is a web application where students can buy and sell items, offer services, discover listings, and connect with other members of their community.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Features
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- **User Accounts** — Register, manage profiles, and update account settings.
+- **Marketplace Listings** — Browse, search, filter, and sort available listings.
+- **Categories** — Find items and services by category.
+- **Listing Management** — Create and manage marketplace listings.
+- **Favorites** — Save listings for quick access.
+- **Orders** — Manage transactions and order statuses.
+- **Reviews and Ratings** — Allow buyers to review sellers after completed orders.
+- **Messaging and Attachments** — Support communication and file attachments.
+- **Reports and Moderation** — Report listings or users for administrative review.
+- **Admin Dashboard** — Manage users, listings, reports, and marketplace statistics.
+- **Transaction Reports** — Review marketplace transaction information.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Technology Stack
 
-## Learning Laravel
+**Backend**
+- PHP 8.3 or newer
+- Laravel 13
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+**Frontend**
+- React 19
+- TypeScript
+- Inertia.js
+- Tailwind CSS 4
+- Vite
+- Lucide React icons
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+**Database**
+- SQLite by default in the example environment configuration
+- Other database connections may be configured through Laravel's environment settings
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+## Requirements
 
-## Agentic Development
+Install the following before setting up the project:
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+- PHP 8.3 or newer
+- Composer
+- Node.js and npm
+- Git
+
+Ensure your PHP installation has the extensions required by Laravel and your installed dependencies.
+
+## Installation
+
+### 1. Clone the repository
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+git clone https://github.com/Signaless1/ACC-Marketplace.git
+cd ACC-Marketplace
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+### 2. Install PHP dependencies
 
-## Contributing
+```bash
+composer install
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### 3. Configure the environment
 
-## Code of Conduct
+Create your local environment file.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+**Windows Command Prompt:**
 
-## Security Vulnerabilities
+```cmd
+copy .env.example .env
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+**macOS or Linux:**
 
-## License
+```bash
+cp .env.example .env
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Generate the application key:
 
-## MVP features added (reviews → admin)
+```bash
+php artisan key:generate
+```
 
-After pulling these changes:
+### 4. Configure the database
+
+The example environment uses SQLite.
+
+Ensure the SQLite database file exists at `database/database.sqlite`. If it does not exist, create an empty file at that location.
+
+Then run the migrations:
 
 ```bash
 php artisan migrate
-php artisan db:seed --class=AdminSeeder   # admin@acc.test / password  (change it!)
+```
+
+If you choose another supported database, update the `DB_*` settings in your `.env` file and create the database before running migrations.
+
+### 5. Install frontend dependencies
+
+```bash
+npm install
+```
+
+### 6. Prepare uploaded files
+
+```bash
 php artisan storage:link
-npm run build   # or npm run dev
+```
+
+### 7. Start the application
+
+Run the development command:
+
+```bash
+composer run dev
+```
+
+Use the local URL displayed in the terminal to open the application.
+
+To create a production frontend build instead, run:
+
+```bash
+npm run build
+```
+
+## Testing
+
+Run the automated test suite with:
+
+```bash
 php artisan test
 ```
 
-- **Reviews & ratings** – buyers rate sellers on completed orders (`/reviews`, order cards).
-- **Profiles** – public profile at `/users/{id}`; edit name/bio/photo and change password at `/settings`.
-- **Search & filters** – server-side, URL-based (`/marketplace?q=&category=&type=&min_price=&max_price=&availability=&sort=`).
-- **Favorites** – heart on cards/detail page; list at `/favorites`.
-- **Reports** – report listings or users; admins triage at `/admin/reports`.
-- **Admin panel** – `/admin` (stats, users, listings, reports). Admin = `users.role = 'admin'`.
-- **Order integrity** – transactions + row locks, enforced status transitions, Policies for listings/orders.
+## Project Structure
 
+| Directory or file | Purpose |
+|---|---|
+| `app/` | Application logic, models, policies, and other backend classes |
+| `bootstrap/` | Laravel application bootstrapping |
+| `config/` | Application configuration |
+| `database/` | Migrations, seeders, factories, and database files |
+| `public/` | Public entry point and static assets |
+| `resources/` | Frontend components, pages, styles, and other resources |
+| `routes/` | Application route definitions |
+| `storage/` | Logs, generated files, and application storage |
+| `tests/` | Automated tests |
+| `composer.json` | PHP dependencies and Composer scripts |
+| `package.json` | Frontend dependencies and npm scripts |
+| `vite.config.js` | Vite build configuration |
 
-## Dashboard, attachments, product ratings & transaction reports
+## Security
 
-After copying these files over the project:
+- Keep your `.env` file and application secrets private.
+- Never commit passwords, API keys, or production credentials.
+- Change any default development credentials before using the application.
+- Use `APP_DEBUG=false` in production.
+- Review and test database migrations before applying them to production data.
 
-```bash
-php artisan migrate        # 7 new migrations (quantity, attachments, ratings, report fields...)
-composer run dev
-php artisan test           # 98 tests
-```
+## Repository
 
-### Allow bigger uploads (needed for videos)
+GitHub: https://github.com/Signaless1/ACC-Marketplace
 
-PHP's defaults (2 MB per file) are too small for chat and review videos. Edit
-your `php.ini` (run `php --ini` to find it), then restart `composer run dev`:
+---
 
-```ini
-upload_max_filesize = 32M
-post_max_size = 64M
-max_file_uploads = 20
-```
-
-The app accepts files up to 25 MB each (5 per chat message, 4 per review).
-
-### Where to put your own pictures
-
-`resources/js/config/siteImages.ts` lists every image slot. Put the file in
-`public/images/` and type its name there. Missing files show a green placeholder
-that prints the name it expects.
-
-### Files that are no longer used (safe to delete)
-
-- `resources/css/dashboard.css` (the shell is now Tailwind)
-- `resources/js/pages/Admin/Dashboard.tsx` (the admin overview moved to `/dashboard`)
-- The old landing components: `Navbar.tsx`, `Hero.tsx`, `Stats.tsx`, `Features.tsx`, `HowItWorks.tsx`, `Safety.tsx`, `CTA.tsx`, `Footer.tsx` and `acc-home.css`
+Developed for the ACC student community.
