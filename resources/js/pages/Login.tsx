@@ -19,6 +19,10 @@ export default function Login() {
         });
     }
 
+    // The server explains a suspension in the email error. When it does, show the
+    // way to ask for a second look instead of leaving people at a dead end.
+    const suspended = /suspended/i.test(form.errors.email ?? '');
+
     return (
         <AuthLayout
             title="Welcome back"
@@ -57,6 +61,19 @@ export default function Login() {
                     />
                 </FormField>
 
+                {suspended && (
+                    <p className="rounded-xl bg-sun-300/30 px-4 py-3 text-[14px] leading-relaxed text-pine-950">
+                        Think this is a mistake?{' '}
+                        <Link
+                            href="/appeal"
+                            className="font-bold text-pine-700 underline decoration-sun-500 decoration-[3px] underline-offset-4 transition hover:text-pine-900"
+                        >
+                            Appeal this decision
+                        </Link>
+                        . An administrator will read your side.
+                    </p>
+                )}
+
                 <FormField
                     id="password"
                     label="Password"
@@ -77,17 +94,26 @@ export default function Login() {
                     />
                 </FormField>
 
-                <label className="flex w-fit cursor-pointer items-center gap-2.5 text-sm text-pine-900/80">
-                    <input
-                        type="checkbox"
-                        checked={form.data.remember}
-                        onChange={(e) =>
-                            form.setData('remember', e.target.checked)
-                        }
-                        className="h-4.5 w-4.5 rounded border-pine-900/30 accent-pine-700"
-                    />
-                    Keep me logged in on this device
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                    <label className="flex w-fit cursor-pointer items-center gap-2.5 text-sm text-pine-900/80">
+                        <input
+                            type="checkbox"
+                            checked={form.data.remember}
+                            onChange={(e) =>
+                                form.setData('remember', e.target.checked)
+                            }
+                            className="h-4.5 w-4.5 rounded border-pine-900/30 accent-pine-700"
+                        />
+                        Keep me logged in on this device
+                    </label>
+
+                    <Link
+                        href="/forgot-password"
+                        className="text-sm font-bold text-pine-700 underline decoration-sun-500 decoration-2 underline-offset-4 transition hover:text-pine-900"
+                    >
+                        Forgot password?
+                    </Link>
+                </div>
 
                 <button
                     type="submit"

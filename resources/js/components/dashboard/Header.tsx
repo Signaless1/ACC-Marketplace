@@ -104,7 +104,7 @@ export default function Header({
                 </form>
 
                 <div className="flex items-center gap-1.5">
-                    {user?.role !== 'admin' && (
+                    {(
                         <Link
                             href="/listings/create"
                             className="ui-btn ui-btn-gold ui-btn-sm mr-1 hidden sm:inline-flex"

@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\RegisterRequest;
-use App\Support\PhilippinePhone;
+use App\Support\PhoneNumber;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -21,33 +21,35 @@ class SettingsController extends Controller
     {
         $user = $request->user();
 
+        // Same normalisation as registration: any common way of typing a
+        // Philippine mobile number becomes +639XXXXXXXXX before it is checked.
         if ($request->has('phone')) {
+            $typed = $request->input('phone');
+
             $request->merge([
-                'phone' => PhilippinePhone::normalize($request->input('phone'))
-                    ?? $request->input('phone'),
+                'phone' => PhoneNumber::normalize($typed) ?? (is_string($typed) ? trim($typed) : $typed),
             ]);
         }
 
         $validated = $request->validate([
             'name' => RegisterRequest::nameRules(),
-            // Accounts that predate phone numbers can add one here. Once an
-            // account has a number it cannot be blanked out.
-            'phone' => [
-                'sometimes',
-                $user->phone ? 'required' : 'nullable',
-                ...RegisterRequest::phoneRules($user->id),
-            ],
             'bio' => ['nullable', 'string', 'max:500'],
             'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'remove_avatar' => ['nullable', 'boolean'],
-        ], RegisterRequest::phoneMessages());
+            // Optional on this form so older clients keep working, but if it is
+            // sent it cannot be blanked out: every account keeps a number.
+            'phone' => ['sometimes', ...RegisterRequest::phoneRules($user->id)],
+        ], [
+            'phone.required' => 'Enter your mobile number, like 0917 123 4567.',
+            'phone.unique' => 'This mobile number is already registered to another account.',
+        ]);
 
         $data = [
             'name' => $validated['name'],
             'bio' => $validated['bio'] ?? null,
         ];
 
-        if (array_key_exists('phone', $validated) && $validated['phone'] !== null) {
+        if (array_key_exists('phone', $validated)) {
             $data['phone'] = $validated['phone'];
         }
 

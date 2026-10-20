@@ -13,7 +13,9 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable(['name', 'email', 'phone', 'password', 'bio', 'avatar_path'])]
-// phone is private: it is only sent to its owner (see HandleInertiaRequests).
+// The phone number is private: it is never serialised by default, so it cannot
+// leak into a page that happens to send a whole User to the browser. Code that
+// is allowed to show it (the owner, admins) reads it explicitly.
 #[Hidden(['password', 'remember_token', 'phone'])]
 class User extends Authenticatable
 {
@@ -32,6 +34,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'suspended_at' => 'datetime',
+            'reinstated_at' => 'datetime',
             'password' => 'hashed',
         ];
     }
@@ -76,6 +79,12 @@ class User extends Authenticatable
         return $this->suspended_at !== null;
     }
 
+    /** Suspended by the report algorithm rather than by an admin. */
+    public function isAutoSuspended(): bool
+    {
+        return $this->isSuspended() && $this->suspension_type === 'auto';
+    }
+
     protected function avatarUrl(): Attribute
     {
         return Attribute::get(
@@ -103,5 +112,15 @@ class User extends Authenticatable
     public function reportsFiled(): HasMany
     {
         return $this->hasMany(Report::class, 'reporter_id');
+    }
+
+    public function reportsAgainst(): HasMany
+    {
+        return $this->hasMany(Report::class, 'reported_user_id');
+    }
+
+    public function appeals(): HasMany
+    {
+        return $this->hasMany(SuspensionAppeal::class);
     }
 }

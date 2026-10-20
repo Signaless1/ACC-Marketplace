@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests;
 
-use App\Support\PhilippinePhone;
+use App\Rules\PhilippineMobile;
+use App\Rules\RealEmail;
+use App\Support\PhoneNumber;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -27,10 +29,12 @@ class RegisterRequest extends FormRequest
             'email' => is_string($this->email)
                 ? mb_strtolower(trim($this->email))
                 : $this->email,
-            // 0917 123 4567, +63 917 123 4567 and 639171234567 all become
-            // 09171234567. Anything that is not a PH mobile number is left
-            // as typed so validation can reject it.
-            'phone' => PhilippinePhone::normalize($this->phone) ?? $this->phone,
+            // 0917 123 4567, +63 917 123 4567 and 9171234567 all become
+            // +639171234567. Anything that is not a mobile number is left as
+            // typed so the error message can show what was entered.
+            'phone' => is_string($this->phone)
+                ? (PhoneNumber::normalize($this->phone) ?? trim($this->phone))
+                : $this->phone,
         ]);
     }
 
@@ -52,27 +56,21 @@ class RegisterRequest extends FormRequest
     }
 
     /**
-     * Shared by registration and the settings page. Expects the value to be
-     * normalised first (see PhilippinePhone::normalize).
+     * Shared by registration and the settings page. The value must already be
+     * normalised with PhoneNumber::normalize(); the rule only accepts the
+     * canonical +639XXXXXXXXX form, so uniqueness is checked on one spelling.
      *
      * @return array<int, mixed>
      */
     public static function phoneRules(?int $ignoreUserId = null): array
     {
         return [
+            'bail',
+            'required',
             'string',
-            // Exactly 11 digits starting with 09: the only form we store.
-            'regex:'.PhilippinePhone::PATTERN,
+            'max:20',
+            new PhilippineMobile(),
             Rule::unique('users', 'phone')->ignore($ignoreUserId),
-        ];
-    }
-
-    public static function phoneMessages(): array
-    {
-        return [
-            'phone.required' => 'Enter your mobile number.',
-            'phone.regex' => 'Enter a valid Philippine mobile number: 11 digits starting with 09 (like 09171234567), or +63 followed by 10 digits.',
-            'phone.unique' => 'That mobile number is already linked to another account.',
         ];
     }
 
@@ -90,13 +88,17 @@ class RegisterRequest extends FormRequest
         return [
             'name' => self::nameRules(),
             'email' => [
+                'bail',
                 'required',
                 'string',
                 'email:rfc',
                 'max:254',
+                // Not a throw-away mailbox, a typo like emaill.com, or a domain
+                // that does not exist.
+                new RealEmail(),
                 'unique:users,email',
             ],
-            'phone' => ['required', ...self::phoneRules()],
+            'phone' => self::phoneRules(),
             'password' => ['required', 'string', 'confirmed', self::passwordRule()],
         ];
     }
@@ -104,13 +106,14 @@ class RegisterRequest extends FormRequest
     public function messages(): array
     {
         return [
-            ...self::phoneMessages(),
             'name.regex' => 'Your name can only contain letters, spaces, apostrophes, periods and hyphens.',
             'name.min' => 'Please enter your full name.',
             'name.max' => 'Your name must be 60 characters or fewer.',
             'email.email' => 'Enter a valid email address, like you@example.com.',
             'email.max' => 'That email address is too long.',
             'email.unique' => 'An account with this email already exists. Try logging in instead.',
+            'phone.required' => 'Enter your mobile number, like 0917 123 4567.',
+            'phone.unique' => 'This mobile number is already registered to another account.',
             'password.confirmed' => 'The two passwords do not match.',
         ];
     }

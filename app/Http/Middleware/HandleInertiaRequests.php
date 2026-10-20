@@ -43,8 +43,8 @@ class HandleInertiaRequests extends Middleware
 
             'auth' => [
                 // The phone number is hidden on the model so it can never leak
-                // through another page; the owner still sees their own.
-                'user' => $user?->makeVisible('phone'),
+                // into someone else's page; the owner's own copy is added here.
+                'user' => $user ? [...$user->toArray(), 'phone' => $user->phone] : null,
             ],
 
             // Closures: only computed when a page actually needs them.
@@ -56,9 +56,6 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
-                // Set when the person tried to reach (or just reported) a
-                // suspended user. Shown as a pop-up by SuspendedNotice.
-                'suspended' => fn () => $request->session()->get('suspended'),
             ],
         ];
     }

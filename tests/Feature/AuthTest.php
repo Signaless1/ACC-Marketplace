@@ -16,7 +16,7 @@ class AuthTest extends TestCase
         return array_merge([
             'name' => "Juan Dela Cruz",
             'email' => 'juan@example.com',
-            'phone' => '09171234567',
+            'phone' => '0917 123 4567',
             'password' => 'password123',
             'password_confirmation' => 'password123',
         ], $overrides);

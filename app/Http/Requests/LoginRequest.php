@@ -83,14 +83,40 @@ class LoginRequest extends FormRequest
         }
 
         if ($user->isSuspended()) {
+            // The password was right, so it is safe to say why and where the
+            // appeal stands, instead of leaving them at a dead end.
             throw ValidationException::withMessages([
-                'email' => 'This account has been suspended. Please contact an administrator.',
+                'email' => $this->suspendedMessage($user),
             ]);
         }
 
         RateLimiter::clear($this->throttleKey());
 
         Auth::login($user, $this->boolean('remember'));
+    }
+
+    private function suspendedMessage(User $user): string
+    {
+        $message = 'This account has been suspended'
+            .($user->suspension_reason ? ': '.rtrim($user->suspension_reason, '.').'.' : '.');
+
+        $appeal = $user->appeals()->latest('id')->first();
+
+        if ($appeal === null) {
+            return $message.' You can appeal this decision.';
+        }
+
+        if ($appeal->status === 'pending') {
+            return $message.' Your appeal is waiting for review.';
+        }
+
+        if ($appeal->status === 'denied') {
+            return $message.' Your last appeal was refused'
+                .($appeal->decision_note ? ': '.rtrim($appeal->decision_note, '.').'.' : '.')
+                .' You can appeal again later.';
+        }
+
+        return $message;
     }
 
     private function ensureIsNotRateLimited(): void

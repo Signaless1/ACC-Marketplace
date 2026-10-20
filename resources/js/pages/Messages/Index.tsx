@@ -29,9 +29,10 @@ interface Conversation {
     };
     latest_message: {
         sender_id: number;
-        is_deleted: boolean;
         body: string | null;
         attachments: Attachment[];
+        /** The sender deleted it for everyone: there is no text or file to show. */
+        deleted: boolean;
     } | null;
 }
 
@@ -128,12 +129,12 @@ export default function Index({
                                     const last = c.latest_message;
                                     const unread = c.unread_messages_count > 0;
                                     const mine = last?.sender_id === currentUserId;
-                                    const preview = last
-                                        ? last.is_deleted
-                                            ? mine
-                                                ? 'You deleted this message'
-                                                : 'This message was deleted'
-                                            : last.body ||
+                                    const preview = last?.deleted
+                                        ? mine
+                                            ? 'You deleted this message'
+                                            : 'This message was deleted'
+                                        : last
+                                        ? last.body ||
                                           (last.attachments.length > 0
                                               ? `${last.attachments.length} attachment${last.attachments.length === 1 ? '' : 's'}`
                                               : '')
@@ -168,11 +169,11 @@ export default function Index({
                                                             unread ? 'font-semibold text-ink' : 'text-ink-2'
                                                         }`}
                                                     >
-                                                        {last && !last.is_deleted && last.attachments.length > 0 && !last.body && (
+                                                        {last && last.attachments.length > 0 && !last.body && (
                                                             <Paperclip size={14} className="shrink-0" />
                                                         )}
-                                                        <span className="truncate">
-                                                            {mine && last && !last.is_deleted ? 'You: ' : ''}
+                                                        <span className={`truncate ${last?.deleted ? 'italic' : ''}`}>
+                                                            {mine && last && !last.deleted ? 'You: ' : ''}
                                                             {preview}
                                                         </span>
                                                     </span>

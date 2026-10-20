@@ -4,16 +4,15 @@ import {
     Heart,
     LayoutDashboard,
     LogOut,
-    MessageCircle,
     Package,
     Plus,
     ReceiptText,
+    Scale,
     Settings,
     ShieldCheck,
     ShoppingBag,
     Star,
     Store,
-    UserRound,
     Users,
     X,
     type LucideIcon,
@@ -50,67 +49,55 @@ export default function Sidebar({
     onCloseMobile,
 }: SidebarProps) {
     const { url, props } = usePage<SharedProps>();
-    const { unreadMessageCount, pendingOrderCount, pendingReportCount } = useLive();
+    const { pendingOrderCount, pendingReportCount } = useLive();
     const user = props.auth.user;
     const isAdmin = user?.role === 'admin';
 
     const path = url.split('?')[0];
 
-    const groups: NavGroup[] = isAdmin
-        ? [
-              {
-                  label: 'Moderation',
-                  items: [
-                      { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, exact: true },
-                      { label: 'Reports', href: '/admin/reports', icon: Flag, badge: pendingReportCount },
-                      { label: 'Transactions', href: '/admin/orders', icon: ReceiptText },
-                      { label: 'Listings', href: '/admin/listings', icon: Package },
-                      { label: 'Users', href: '/admin/users', icon: Users },
-                  ],
-              },
-              {
-                  label: 'Marketplace',
-                  items: [
-                      { label: 'Browse marketplace', href: '/marketplace', icon: Store },
-                      { label: 'Messages', href: '/messages', icon: MessageCircle, badge: unreadMessageCount },
-                  ],
-              },
-              {
-                  label: 'Account',
-                  items: [{ label: 'Settings', href: '/settings', icon: Settings }],
-              },
-          ]
-        : [
-              {
-                  label: 'Discover',
-                  items: [
-                      { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, exact: true },
-                      { label: 'Marketplace', href: '/marketplace', icon: Store },
-                      { label: 'Favorites', href: '/favorites', icon: Heart },
-                  ],
-              },
-              {
-                  label: 'Selling & buying',
-                  items: [
-                      { label: 'My listings', href: '/listings', icon: Package, exact: true },
-                      { label: 'My orders', href: '/orders', icon: ShoppingBag, badge: pendingOrderCount },
-                      { label: 'Reviews', href: '/reviews', icon: Star },
-                  ],
-              },
-              {
-                  label: 'Inbox',
-                  items: [
-                      { label: 'Messages', href: '/messages', icon: MessageCircle, badge: unreadMessageCount },
-                  ],
-              },
-              {
-                  label: 'Account',
-                  items: [
-                      { label: 'My profile', href: `/users/${user?.id}`, icon: UserRound, exact: true },
-                      { label: 'Settings', href: '/settings', icon: Settings },
-                  ],
-              },
-          ];
+    // Everyone gets the same member navigation; admins get the Moderation group on top.
+    // Messages is reached only through the header icon, and the profile through the avatar menu.
+    const moderationGroup: NavGroup = {
+        label: 'Moderation',
+        items: [
+            { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, exact: true },
+            { label: 'Reports', href: '/admin/reports', icon: Flag, badge: pendingReportCount },
+            { label: 'Transactions', href: '/admin/orders', icon: ReceiptText },
+            { label: 'Listings', href: '/admin/listings', icon: Package },
+            { label: 'Users', href: '/admin/users', icon: Users },
+        ],
+    };
+
+    const discoverItems: NavItem[] = [
+        { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, exact: true },
+        { label: 'Marketplace', href: '/marketplace', icon: Store },
+        { label: 'Favorites', href: '/favorites', icon: Heart },
+    ];
+
+    const memberGroups: NavGroup[] = [
+        {
+            label: 'Discover',
+            // Admins already have Dashboard under Moderation.
+            items: isAdmin ? discoverItems.slice(1) : discoverItems,
+        },
+        {
+            label: 'Selling & buying',
+            items: [
+                { label: 'My listings', href: '/listings', icon: Package, exact: true },
+                { label: 'My orders', href: '/orders', icon: ShoppingBag, badge: pendingOrderCount },
+                { label: 'Reviews', href: '/reviews', icon: Star },
+            ],
+        },
+        {
+            label: 'Account',
+            items: [
+                { label: 'My reports', href: '/reports', icon: Scale },
+                { label: 'Settings', href: '/settings', icon: Settings },
+            ],
+        },
+    ];
+
+    const groups: NavGroup[] = isAdmin ? [moderationGroup, ...memberGroups] : memberGroups;
 
     const isActive = (item: NavItem) =>
         item.exact
@@ -243,7 +230,7 @@ export default function Sidebar({
 
                 {/* Footer: sell button + account */}
                 <div className="shrink-0 space-y-3 border-t border-white/10 p-3">
-                    {!isAdmin && (
+                    {(
                         <Link
                             href="/listings/create"
                             title={collapsed ? 'Sell something' : undefined}

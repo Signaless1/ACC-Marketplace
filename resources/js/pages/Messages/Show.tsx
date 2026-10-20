@@ -2,14 +2,14 @@ import { Head, Link, router } from '@inertiajs/react';
 import {
     ArrowDown,
     ArrowLeft,
-    CheckCheck,
     Ban,
+    CheckCheck,
     Flag,
-    MoreVertical,
     Package,
     Receipt,
     Send,
     ShieldAlert,
+    Trash2,
 } from 'lucide-react';
 import { FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import AppLayout from '../../Layouts/AppLayout';
@@ -21,7 +21,7 @@ import {
     FilePreviews,
     useFilePicker,
 } from '../../components/ui/Attachments';
-import DeleteMessageModal from '../../components/ui/DeleteMessageModal';
+import DeleteMessageDialog from '../../components/ui/DeleteMessageDialog';
 import ReportModal from '../../components/ui/ReportModal';
 import StatusBadge from '../../components/ui/StatusBadge';
 import { useLiveReload } from '../../lib/live';
@@ -39,10 +39,10 @@ interface Msg {
     body: string | null;
     read_at: string | null;
     created_at: string;
-    /** True once the sender deleted it for everyone; body and attachments are then empty. */
-    is_deleted: boolean;
     sender: Person;
     attachments: Attachment[];
+    /** True when the sender deleted it for everyone: no text or files are sent. */
+    deleted: boolean;
 }
 
 interface Props {
@@ -72,6 +72,18 @@ const USER_REPORT_REASONS: Record<string, string> = {
     inappropriate: 'Inappropriate content',
     other: 'Other',
 };
+
+/** What to show in the delete dialog: the text, or what kind of file it carries. */
+function describe(message: Msg): string {
+    const text = message.body?.trim();
+    if (text) return text;
+
+    const files = message.attachments;
+    if (files.length === 0) return 'Message';
+    if (files.length > 1) return `${files.length} attachments`;
+
+    return files[0].kind === 'image' ? 'Photo' : files[0].kind === 'video' ? 'Video' : 'File';
+}
 
 const clock = (iso: string) =>
     new Date(iso).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
@@ -186,16 +198,14 @@ export default function Show({ conversation, currentUserId, order }: Props) {
         );
     };
 
-    const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            send();
-        }
-    };
+    // "Delete for me" hides it from your view only; "for everyone" hides it from
+    // both of you. The server decides what is allowed (your own messages only).
+    const removeMessage = (scope: 'me' | 'everyone') => {
+        if (!deleting) return;
 
-    const deleteMessage = (message: Msg, scope: 'me' | 'everyone') => {
-        router.delete(`/messages/${conversation.id}/${message.id}`, {
-            data: { scope },
+        // The scope travels in the address (?scope=me|everyone): a DELETE request
+        // has no form body to rely on.
+        router.delete(`/messages/${conversation.id}/${deleting.id}?scope=${scope}`, {
             preserveScroll: true,
             onStart: () => setDeleteBusy(true),
             onFinish: () => {
@@ -205,17 +215,11 @@ export default function Show({ conversation, currentUserId, order }: Props) {
         });
     };
 
-    const describe = (message: Msg) => {
-        if (message.is_deleted) {
-            return message.sender_id === currentUserId
-                ? 'You deleted this message'
-                : 'This message was deleted';
+    const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            send();
         }
-
-        if (message.body) return message.body;
-
-        const n = message.attachments.length;
-        return n === 1 ? '1 attachment' : `${n} attachments`;
     };
 
     const attachmentError =
@@ -359,7 +363,19 @@ export default function Show({ conversation, currentUserId, order }: Props) {
                                             </div>
                                         )}
 
-                                        <div className={`flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'} ${firstOfRun ? 'mt-3' : ''}`}>
+                                        <div className={`group flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'} ${firstOfRun ? 'mt-3' : ''}`}>
+                                            {mine && !message.deleted && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setDeleting(message)}
+                                                    aria-label="Delete message"
+                                                    title="Delete message"
+                                                    className="self-center rounded-full p-1.5 text-ink-3 opacity-0 transition hover:bg-mist-100 hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-70"
+                                                >
+                                                    <Trash2 size={15} />
+                                                </button>
+                                            )}
+
                                             {!mine && (
                                                 <span className="w-8 shrink-0">
                                                     {firstOfRun && (
@@ -368,63 +384,43 @@ export default function Show({ conversation, currentUserId, order }: Props) {
                                                 </span>
                                             )}
 
-                                            <div
-                                                className={`group flex max-w-[86%] items-end gap-1 sm:max-w-[74%] ${
-                                                    mine ? 'flex-row-reverse' : 'flex-row'
-                                                }`}
-                                            >
-                                                <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                                                <div
-                                                    className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm ${
-                                                        message.is_deleted
-                                                            ? 'border border-dashed border-mist-300 bg-transparent text-ink-3 shadow-none'
-                                                            : mine
-                                                              ? 'rounded-br-md bg-pine-800 text-white'
-                                                              : 'rounded-bl-md bg-white text-ink ring-1 ring-mist-200'
-                                                    }`}
-                                                >
-                                                    {message.is_deleted ? (
-                                                        <p className="flex items-center gap-1.5 text-sm italic">
-                                                            <Ban size={14} className="shrink-0" />
-                                                            {describe(message)}
-                                                        </p>
-                                                    ) : (
-                                                        <>
-                                                            {message.body && (
-                                                                <p className="whitespace-pre-wrap break-words">{message.body}</p>
-                                                            )}
+                                            <div className={`flex max-w-[82%] flex-col sm:max-w-[70%] ${mine ? 'items-end' : 'items-start'}`}>
+                                                {message.deleted ? (
+                                                    <div className="flex items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-[14px] italic text-ink-3 ring-1 ring-mist-200">
+                                                        <Ban size={14} className="shrink-0" />
+                                                        {mine ? 'You deleted this message' : 'This message was deleted'}
+                                                    </div>
+                                                ) : (
+                                                    <div
+                                                        className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm ${
+                                                            mine
+                                                                ? 'rounded-br-md bg-pine-800 text-white'
+                                                                : 'rounded-bl-md bg-white text-ink ring-1 ring-mist-200'
+                                                        }`}
+                                                    >
+                                                        {message.body && (
+                                                            <p className="whitespace-pre-wrap break-words">{message.body}</p>
+                                                        )}
 
-                                                            {message.attachments.length > 0 && (
-                                                                <div className={message.body ? 'mt-2.5' : ''}>
-                                                                    <AttachmentGrid
-                                                                        attachments={message.attachments}
-                                                                        tone={mine ? 'dark' : 'light'}
-                                                                    />
-                                                                </div>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                </div>
+                                                        {message.attachments.length > 0 && (
+                                                            <div className={message.body ? 'mt-2.5' : ''}>
+                                                                <AttachmentGrid
+                                                                    attachments={message.attachments}
+                                                                    tone={mine ? 'dark' : 'light'}
+                                                                />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
 
                                                 <span className="mt-1 flex items-center gap-1 px-1 text-[11px] text-ink-3">
                                                     {clock(message.created_at)}
-                                                    {mine && !message.is_deleted && index === lastMineIndex && message.read_at && (
+                                                    {mine && index === lastMineIndex && message.read_at && (
                                                         <span className="inline-flex items-center gap-0.5 font-semibold text-pine-700">
                                                             <CheckCheck size={13} /> Seen
                                                         </span>
                                                     )}
                                                 </span>
-                                                </div>
-
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setDeleting(message)}
-                                                    aria-label="Delete message"
-                                                    title="Delete message"
-                                                    className="mb-6 shrink-0 rounded-full p-1.5 text-ink-3 transition hover:bg-mist-200 hover:text-ink focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-                                                >
-                                                    <MoreVertical size={16} />
-                                                </button>
                                             </div>
                                         </div>
                                     </li>
@@ -504,11 +500,12 @@ export default function Show({ conversation, currentUserId, order }: Props) {
             </div>
 
             {deleting && (
-                <DeleteMessageModal
-                    preview={describe(deleting)}
-                    canDeleteForEveryone={deleting.sender_id === currentUserId && !deleting.is_deleted}
+                <DeleteMessageDialog
+                    summary={describe(deleting)}
+                    attachmentCount={deleting.attachments.length}
+                    otherName={other.name}
                     processing={deleteBusy}
-                    onDelete={(scope) => deleteMessage(deleting, scope)}
+                    onDelete={removeMessage}
                     onClose={() => setDeleting(null)}
                 />
             )}

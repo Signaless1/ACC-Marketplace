@@ -16,23 +16,25 @@ use App\Models\User;
 class TransactionSummary
 {
     /**
-     * @param  User|null  $viewer  Who is reading the document. Admins see every
-     *                             message, including ones the sender deleted
-     *                             (flagged as deleted) because a deleted message
-     *                             can still be evidence. Everyone else sees the
-     *                             chat exactly as they saw it: messages they hid
-     *                             for themselves are left out and messages
-     *                             deleted for everyone appear without content.
+     * What the document shows depends on who is reading it:
+     *
+     *  - Admins see everything, including messages that were deleted (marked
+     *    as such) and each person's phone number, so a dispute can be judged.
+     *  - The two people involved see their own conversation as they see it in
+     *    the chat: messages they deleted for themselves are gone, and messages
+     *    deleted for everyone appear only as "deleted". Each of them sees their
+     *    own email but not the other person's, and never a phone number.
+     *
      * @return array<string, mixed>
      */
     public static function for(Order $order, ?User $viewer = null): array
     {
-        $isAdmin = $viewer?->isAdmin() === true;
+        $isAdmin = $viewer?->isAdmin() ?? false;
 
         $order->loadMissing([
             'listing.category',
-            'buyer:id,name,email,created_at',
-            'seller:id,name,email,created_at',
+            'buyer:id,name,email,phone,created_at',
+            'seller:id,name,email,phone,created_at',
             'canceller:id,name',
             'review',
         ]);
@@ -47,29 +49,36 @@ class TransactionSummary
 
         $messages = $conversation
             ? $conversation->messages()
+                ->when(
+                    $viewer !== null && ! $isAdmin,
+                    fn ($query) => $query->visibleTo($viewer->id)
+                )
                 ->with(['sender:id,name', 'attachments'])
-                ->when(! $isAdmin, fn ($q) => $q->visibleTo((int) $viewer?->id))
                 ->oldest()
+                ->orderBy('id')
                 ->take(500)
                 ->get()
                 ->map(function ($m) use ($order, $isAdmin) {
-                    $deleted = $m->deleted_for_everyone_at !== null;
-                    $showContent = $isAdmin || ! $deleted;
+                    $deleted = $m->isDeletedForEveryone();
+                    $hidden = $deleted && ! $isAdmin;
 
                     return [
                         'id' => $m->id,
                         'sender' => $m->sender?->name,
                         'role' => $m->sender_id === $order->buyer_id ? 'buyer' : 'seller',
-                        'body' => $showContent ? $m->body : null,
+                        'body' => $hidden ? null : $m->body,
                         'at' => $m->created_at,
+                        // Admins can still read it, but it is flagged so nobody
+                        // mistakes it for a message both people could see.
                         'deleted' => $deleted,
-                        'attachments' => $showContent
-                            ? $m->attachments->map(fn ($a) => [
+                        'deleted_at' => $deleted && $isAdmin ? $m->deleted_for_everyone_at : null,
+                        'attachments' => $hidden
+                            ? collect()
+                            : $m->attachments->map(fn ($a) => [
                                 'name' => $a->original_name,
                                 'kind' => $a->kind,
                                 'size' => $a->human_size,
-                            ])->values()
-                            : collect(),
+                            ])->values(),
                     ];
                 })->values()
             : collect();
@@ -106,10 +115,21 @@ class TransactionSummary
                 'reason' => Report::allReasons()[$r->reason] ?? $r->reason,
                 'description' => $r->description,
                 'status' => $r->status,
+                // "Dismissed as a false report" is only shown to admins and to the
+                // person who filed it; the other side just sees "Not upheld".
+                'outcome' => ($r->status === 'dismissed' && ! $isAdmin && $viewer?->id !== $r->reporter_id)
+                    ? 'Not upheld'
+                    : $r->outcomeLabel(),
                 'filed_at' => $r->created_at,
+                // The reported person's answer, so the document shows both sides.
+                'response' => $r->respondent_statement,
+                'responded_at' => $r->responded_at,
                 'escalated_to' => $r->escalated_to,
                 'escalated_at' => $r->escalated_at,
-                'admin_note' => $r->admin_note,
+                // The explanation meant for the two people, once decided. The
+                // admin's private working note is for admins only.
+                'decision_note' => $r->isOpen() ? null : $r->decision_note,
+                'admin_note' => $isAdmin ? $r->admin_note : null,
             ]);
 
         return [
@@ -135,21 +155,29 @@ class TransactionSummary
                 'removed' => $listing->hidden_at !== null,
                 'removed_reason' => $listing->removed_reason_label,
             ] : null,
-            'buyer' => [
-                'id' => $order->buyer?->id,
-                'name' => $order->buyer?->name,
-                'email' => $order->buyer?->email,
-                'member_since' => $order->buyer?->created_at,
-            ],
-            'seller' => [
-                'id' => $order->seller?->id,
-                'name' => $order->seller?->name,
-                'email' => $order->seller?->email,
-                'member_since' => $order->seller?->created_at,
-            ],
+            'buyer' => self::person($order->buyer, $viewer, $isAdmin),
+            'seller' => self::person($order->seller, $viewer, $isAdmin),
             'timeline' => $timeline,
             'messages' => $messages,
             'reports' => $reports,
         ];
+    }
+
+    /**
+     * One side of the transaction, with contact details limited to what the
+     * reader is entitled to see.
+     *
+     * @return array<string, mixed>
+     */
+    private static function person(?User $person, ?User $viewer, bool $isAdmin): array
+    {
+        $isSelf = $person !== null && $viewer !== null && $viewer->id === $person->id;
+
+        return [
+            'id' => $person?->id,
+            'name' => $person?->name,
+            'email' => ($isAdmin || $isSelf) ? $person?->email : null,
+            'member_since' => $person?->created_at,
+        ] + ($isAdmin ? ['phone' => $person?->phone] : []);
     }
 }

@@ -9,18 +9,24 @@ import Modal from '../../components/ui/Modal';
 import { Page } from '../../components/ui/PageHeader';
 import Pagination from '../../components/ui/Pagination';
 import StatusBadge from '../../components/ui/StatusBadge';
+import { formatPhone } from '../../lib/phone';
 import { formatDate, Paginated } from '../../types/shared';
 
 interface AdminUser {
     id: number;
     name: string;
     email: string;
+    /** Private to the owner and admins. Null for accounts that predate phone numbers. */
+    phone: string | null;
     avatar_url: string | null;
     role: 'user' | 'admin';
     suspended_at: string | null;
+    /** manual = an admin did it; auto = the report algorithm did. */
+    suspension_type: 'manual' | 'auto' | null;
     suspension_reason: string | null;
     created_at: string;
     listings_count: number;
+    pending_appeals_count: number;
 }
 
 interface Props {
@@ -95,7 +101,7 @@ export default function Users({ users, filters }: Props) {
                             type="search"
                             value={q}
                             onChange={(e) => setQ(e.target.value)}
-                            placeholder="Search by name or email…"
+                            placeholder="Search by name, email or mobile number…"
                             aria-label="Search users"
                             className="ui-input !pl-10"
                         />
@@ -136,6 +142,9 @@ export default function Users({ users, filters }: Props) {
                                                     {user.name}
                                                 </Link>
                                                 <span className="block truncate text-xs text-ink-3">{user.email}</span>
+                                                <span className="block truncate text-xs text-ink-3">
+                                                    {user.phone ? formatPhone(user.phone) : 'No mobile number'}
+                                                </span>
                                             </div>
                                         </div>
                                     </td>
@@ -144,6 +153,19 @@ export default function Users({ users, filters }: Props) {
                                     <td className="px-5 py-3.5 text-ink-2">{formatDate(user.created_at)}</td>
                                     <td className="px-5 py-3.5">
                                         <StatusBadge status={user.suspended_at ? 'suspended' : 'active'} />
+                                        {user.suspended_at && (
+                                            <p className="mt-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-3">
+                                                {user.suspension_type === 'auto' ? 'Automatic (pending review)' : 'By an admin'}
+                                            </p>
+                                        )}
+                                        {user.pending_appeals_count > 0 && (
+                                            <Link
+                                                href="/admin/reports"
+                                                className="mt-1.5 inline-block rounded-full bg-sun-300/40 px-2.5 py-0.5 text-xs font-bold text-sun-800 hover:bg-sun-300/60"
+                                            >
+                                                Appeal waiting
+                                            </Link>
+                                        )}
                                         {user.suspension_reason && (
                                             <p className="mt-1.5 max-w-[16rem] text-xs text-ink-2">
                                                 “{user.suspension_reason}”

@@ -5,11 +5,12 @@ namespace App\Http\Controllers;
 use App\Models\Conversation;
 use App\Models\Listing;
 use App\Models\Message;
+use App\Models\MessageDeletion;
 use App\Models\Order;
 use App\Support\Attachments;
+use App\Support\Chat;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -32,19 +33,22 @@ class MessageController extends Controller
                 'listing.images',
                 'buyer:id,name,avatar_path',
                 'seller:id,name,avatar_path',
-                'latestMessage.attachments',
             ])
             ->withMax('messages', 'created_at')
             ->withCount([
                 'messages as unread_messages_count' => function ($query) use ($userId) {
                     $query
                         ->whereNull('read_at')
-                        ->where('sender_id', '!=', $userId)
-                        ->liveFor($userId);
+                        ->whereNull('deleted_for_everyone_at')
+                        ->where('sender_id', '!=', $userId);
                 },
             ])
             ->latest('messages_max_created_at')
             ->get();
+
+        // The preview line is the newest message THIS person has not deleted
+        // for themselves; text deleted for everyone shows as a placeholder.
+        Chat::attachLatestVisible($conversations, $userId);
 
         return Inertia::render('Messages/Index', [
             'conversations' => $conversations,
@@ -125,13 +129,15 @@ class MessageController extends Controller
             'listing.images',
             'buyer:id,name,avatar_path',
             'seller:id,name,avatar_path',
-            // Leave out what this person deleted for themselves. Messages the
-            // sender deleted for everyone stay as an empty "deleted" bubble
-            // (Message::toArray strips their text and files).
-            'messages' => fn ($query) => $query->visibleTo($userId)->orderBy('id'),
+            // Leave out what this person deleted "for me".
+            'messages' => fn ($messages) => $messages->visibleTo($userId)->orderBy('id'),
             'messages.sender:id,name,avatar_path',
             'messages.attachments',
         ]);
+
+        // Messages deleted "for everyone" stay in the thread as a placeholder,
+        // but their text and files must never reach the browser.
+        $conversation->messages->each(fn (Message $message) => $message->redact());
 
         // The order (if any) between these two people for this listing,
         // so the chat can link to it and offer "Report transaction".
@@ -190,44 +196,52 @@ class MessageController extends Controller
     }
 
     /**
-     * Delete one message, either just for the person asking ("me") or, if they
-     * sent it, for both people in the chat ("everyone"). Text, photos, videos
-     * and files all go together because they belong to the same message.
+     * Delete one of your own messages.
+     *
+     *  - scope=me:       hides it from your view only; the other person still sees it.
+     *  - scope=everyone: hides it from both of you. The content is kept on file for
+     *                    admins for a limited time (see MessagePurger) so a dispute
+     *                    cannot be erased, but neither of you can open it any more.
+     *
+     * You can only delete what you sent. Text, photos and videos are all part of
+     * the message, so they go together.
      */
     public function destroy(
         Request $request,
         Conversation $conversation,
         Message $message
     ): RedirectResponse {
-        $user = $request->user();
+        $userId = $request->user()->id;
 
         abort_unless(
-            $conversation->buyer_id === $user->id ||
-            $conversation->seller_id === $user->id,
+            $conversation->buyer_id === $userId ||
+            $conversation->seller_id === $userId,
             403
         );
 
-        // The message must belong to this conversation, otherwise someone
-        // could pass their own conversation id with another chat's message id.
         abort_unless($message->conversation_id === $conversation->id, 404);
 
+        abort_unless($message->sender_id === $userId, 403);
+
         $validated = $request->validate([
-            'scope' => ['required', Rule::in(['me', 'everyone'])],
+            'scope' => ['required', 'in:me,everyone'],
+        ], [
+            'scope.required' => 'Choose whether to delete the message for you or for everyone.',
+            'scope.in' => 'Choose whether to delete the message for you or for everyone.',
         ]);
 
         if ($validated['scope'] === 'everyone') {
-            // Only the sender can pull a message back from the other person.
-            abort_unless($message->sender_id === $user->id, 403);
-
-            if ($message->deleted_for_everyone_at === null) {
+            if (! $message->isDeletedForEveryone()) {
                 $message->forceFill(['deleted_for_everyone_at' => now()])->save();
             }
 
             return back()->with('success', 'Message deleted for everyone.');
         }
 
-        // "Delete for me" works on any message in the chat, sent or received.
-        $message->hiddenBy()->syncWithoutDetaching([$user->id]);
+        MessageDeletion::query()->firstOrCreate(
+            ['message_id' => $message->id, 'user_id' => $userId],
+            ['created_at' => now()]
+        );
 
         return back()->with('success', 'Message deleted for you.');
     }

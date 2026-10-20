@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\Message;
 use App\Models\Order;
 use App\Models\Report;
+use App\Models\SuspensionAppeal;
 use App\Models\User;
 use Illuminate\Support\Str;
 
@@ -72,7 +73,10 @@ class LiveStatus
             return 0;
         }
 
-        return Report::query()->whereIn('status', ['pending', 'reviewing'])->count();
+        // Open reports plus suspension appeals: both are waiting for an admin,
+        // and both are handled from the Reports page.
+        return Report::query()->whereIn('status', ['pending', 'reviewing'])->count()
+            + SuspensionAppeal::query()->pending()->count();
     }
 
     /**
@@ -92,8 +96,9 @@ class LiveStatus
     {
         return Message::query()
             ->whereNull('read_at')
+            // A message its sender deleted for everyone is no longer unread news.
+            ->whereNull('deleted_for_everyone_at')
             ->where('sender_id', '!=', $user->id)
-            ->liveFor($user->id)
             ->whereHas('conversation', fn ($q) => $q
                 ->where('buyer_id', $user->id)
                 ->orWhere('seller_id', $user->id));

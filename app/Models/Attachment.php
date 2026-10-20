@@ -17,11 +17,12 @@ class Attachment extends Model
         'mime',
         'size',
         'kind',
+        'user_id',
     ];
 
     protected $appends = ['url', 'human_size'];
 
-    protected $hidden = ['disk', 'path'];
+    protected $hidden = ['disk', 'path', 'user_id'];
 
     protected function casts(): array
     {
